@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from pypfopt import EfficientFrontier
 from scipy.optimize import minimize
 import time
+import os
 
 # ── Reproducibility ──────────────────────────────────────────────────────────
 np.random.seed(42)
@@ -28,6 +29,7 @@ np.random.seed(42)
 END_DATE = datetime.today()
 LOOKBACK_DAYS = 5 * 365
 START_DATE = END_DATE - timedelta(days=LOOKBACK_DAYS)
+CACHE_FILE = "prices_cache.parquet"
 
 
 def load_portfolio(csv_path):
@@ -41,7 +43,26 @@ def load_portfolio(csv_path):
     return pd.read_csv(csv_path)
 
 
-def fetch_prices(tickers):
+def _download_with_retry(tickers, start, end):
+    for attempt in range(5):
+        wait = 5 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
+        try:
+            data = yf.download(
+                tickers, start=start, end=end,
+                auto_adjust=True, progress=False, threads=False
+            )['Close'].dropna()
+            if data.empty:
+                raise ValueError("Download returned empty DataFrame (likely rate limited).")
+            return data
+        except Exception as e:
+            if attempt < 4:
+                print(f"  [WARN] Download failed ({e}). Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise RuntimeError(f"Failed to download price data after 5 attempts: {e}")
+
+
+def fetch_prices(tickers, force_refresh=False):
     """
     Fetches YFinance data for the tickers in the list.
     Asset  : TICKERS
@@ -50,25 +71,39 @@ def fetch_prices(tickers):
     Value  : IVE - IVW  (S&P 500 Value minus Growth — HML proxy)
     Rf     : ^IRX (13-week T-bill annualised yield in %)
 
+    Results are cached to CACHE_FILE. On subsequent runs only the missing
+    date window is downloaded and appended. Pass force_refresh=True or
+    delete the cache file to re-download everything.
+
     Args:
         tickers: List of tickers to fetch
+        force_refresh: If True, ignore cache and re-download all data
     Returns:
         Tuple of (price DataFrame, rf_ann float, rf_daily float)
     """
     all_tickers = list(tickers) + ['SPY', 'IWM', 'IVE', 'IVW', '^IRX']
-    for attempt in range(5):
-        try:
-            data = yf.download(
-                all_tickers, start=START_DATE, end=END_DATE,
-                auto_adjust=True, progress=False, threads=False
-            )['Close'].dropna()
-            break
-        except Exception as e:
-            wait = 2 ** attempt * 5   # 5s, 10s, 20s, 40s, 80s
-            print(f"  [WARN] Download failed ({e}). Retrying in {wait}s...")
-            time.sleep(wait)
+
+    if not force_refresh and os.path.exists(CACHE_FILE):
+        cached = pd.read_parquet(CACHE_FILE)
+        last_cached = cached.index[-1].date()
+        today = END_DATE.date()
+
+        if last_cached >= today:
+            print(f"  [Cache] Up to date ({last_cached}). Loading from {CACHE_FILE}")
+            data = cached
+        else:
+            gap_start = last_cached + timedelta(days=1)
+            print(f"  [Cache] Updating from {gap_start} to {today}...")
+            new_data = _download_with_retry(all_tickers, gap_start, END_DATE)
+            data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna()
+            data.to_parquet(CACHE_FILE)
+            print(f"  [Cache] Updated and saved to {CACHE_FILE}")
     else:
-        raise RuntimeError("Failed to download price data after 5 attempts.")
+        print("  [Cache] No cache found. Downloading full history...")
+        data = _download_with_retry(all_tickers, START_DATE, END_DATE)
+        data.to_parquet(CACHE_FILE)
+        print(f"  [Cache] Prices saved to {CACHE_FILE}")
+
     dt = 1 / 252
     rf_ann = float(data['^IRX'].mean()) / 100
     rf_daily = rf_ann * dt
