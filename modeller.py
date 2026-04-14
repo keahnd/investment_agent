@@ -20,6 +20,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from pypfopt import EfficientFrontier
 from scipy.optimize import minimize
+import time
 
 # ── Reproducibility ──────────────────────────────────────────────────────────
 np.random.seed(42)
@@ -55,10 +56,19 @@ def fetch_prices(tickers):
         Tuple of (price DataFrame, rf_ann float, rf_daily float)
     """
     all_tickers = list(tickers) + ['SPY', 'IWM', 'IVE', 'IVW', '^IRX']
-    data = yf.download(
-        all_tickers, start=START_DATE, end=END_DATE,
-        auto_adjust=True, progress=False, threads=False
-    )['Close'].dropna()
+    for attempt in range(5):
+        try:
+            data = yf.download(
+                all_tickers, start=START_DATE, end=END_DATE,
+                auto_adjust=True, progress=False, threads=False
+            )['Close'].dropna()
+            break
+        except Exception as e:
+            wait = 2 ** attempt * 5   # 5s, 10s, 20s, 40s, 80s
+            print(f"  [WARN] Download failed ({e}). Retrying in {wait}s...")
+            time.sleep(wait)
+    else:
+        raise RuntimeError("Failed to download price data after 5 attempts.")
     dt = 1 / 252
     rf_ann = float(data['^IRX'].mean()) / 100
     rf_daily = rf_ann * dt
@@ -633,6 +643,13 @@ def main():
 
         except Exception as e:
             print(f"  [WARN] {ticker} failed: {e}")
+
+    # ── Compute current market weights from shares × latest price ────────────
+    last_prices = raw_prices[tickers].iloc[-1]
+    portfolio_df['price'] = portfolio_df['ticker'].map(last_prices)
+    portfolio_df['market_value'] = portfolio_df['shares'] * portfolio_df['price']
+    total_value = portfolio_df['market_value'].sum()
+    portfolio_df['weight'] = portfolio_df['market_value'] / total_value
 
     # ── Portfolio-level optimisation ─────────────────────────────────────────
     if len(returns_dict) >= 2:
