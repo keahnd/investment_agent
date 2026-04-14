@@ -22,6 +22,22 @@ from pypfopt import EfficientFrontier
 from scipy.optimize import minimize
 import time
 import os
+import sys
+
+
+class _Tee:
+    """Writes to both the real stdout and a report file simultaneously."""
+    def __init__(self, file_obj):
+        self._file = file_obj
+        self._stdout = sys.__stdout__
+
+    def write(self, data):
+        self._stdout.write(data)
+        self._file.write(data)
+
+    def flush(self):
+        self._stdout.flush()
+        self._file.flush()
 
 # ── Reproducibility ──────────────────────────────────────────────────────────
 np.random.seed(42)
@@ -638,6 +654,19 @@ def plot_outputs(ticker, ret, fm, g, mc):
 
 
 def main():
+    report_path = f"analysis_report_{datetime.today().strftime('%Y%m%d_%H%M%S')}.txt"
+    report_file = open(report_path, 'w', encoding='utf-8')
+    sys.stdout = _Tee(report_file)
+
+    try:
+        _run()
+    finally:
+        sys.stdout = sys.__stdout__
+        report_file.close()
+        print(f"\n[Report] Saved to {report_path}")
+
+
+def _run():
     portfolio_df = load_portfolio("portfolio.csv")
     tickers = portfolio_df['ticker'].tolist()
 
