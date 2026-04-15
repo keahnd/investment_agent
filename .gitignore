@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 *.pyo
 prices_cache.parquet
+ff_factors_cache.parquet

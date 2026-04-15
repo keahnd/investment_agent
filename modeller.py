@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
 import yfinance as yf
+import pandas_datareader as pdr
 from datetime import datetime, timedelta
 from pypfopt import EfficientFrontier
 from scipy.optimize import minimize
@@ -39,13 +40,13 @@ class _Tee:
         self._stdout.flush()
         self._file.flush()
 
-# ── Reproducibility ──────────────────────────────────────────────────────────
 np.random.seed(42)
 
 END_DATE = datetime.today()
 LOOKBACK_DAYS = 5 * 365
 START_DATE = END_DATE - timedelta(days=LOOKBACK_DAYS)
 CACHE_FILE = "prices_cache.parquet"
+FF_CACHE_FILE = "ff_factors_cache.parquet"
 
 
 def load_portfolio(csv_path):
@@ -80,24 +81,20 @@ def _download_with_retry(tickers, start, end):
 
 def fetch_prices(tickers, force_refresh=False):
     """
-    Fetches YFinance data for the tickers in the list.
-    Asset  : TICKERS
-    Market : SPY  (S&P 500 — MKT factor proxy)
-    Size   : IWM - SPY  (Russell 2000 minus S&P 500 — SMB proxy)
-    Value  : IVE - IVW  (S&P 500 Value minus Growth — HML proxy)
-    Rf     : ^IRX (13-week T-bill annualised yield in %)
+    Fetches asset prices from yfinance for the given tickers only.
+    Factor data (MKT, SMB, HML, RF) is now sourced from fetch_ff_factors().
 
     Results are cached to CACHE_FILE. On subsequent runs only the missing
     date window is downloaded and appended. Pass force_refresh=True or
     delete the cache file to re-download everything.
 
     Args:
-        tickers: List of tickers to fetch
+        tickers: List of portfolio tickers to fetch
         force_refresh: If True, ignore cache and re-download all data
     Returns:
-        Tuple of (price DataFrame, rf_ann float, rf_daily float)
+        Price DataFrame
     """
-    all_tickers = list(tickers) + ['SPY', 'IWM', 'IVE', 'IVW', '^IRX']
+    all_tickers = list(tickers)
 
     if not force_refresh and os.path.exists(CACHE_FILE):
         cached = pd.read_parquet(CACHE_FILE)
@@ -120,43 +117,73 @@ def fetch_prices(tickers, force_refresh=False):
         data.to_parquet(CACHE_FILE)
         print(f"  [Cache] Prices saved to {CACHE_FILE}")
 
-    dt = 1 / 252
-    rf_ann = float(data['^IRX'].mean()) / 100
-    rf_daily = rf_ann * dt
-    return data, rf_ann, rf_daily
+    return data
 
 
-def compute_returns(raw, ticker, rf_ann):
+def fetch_ff_factors(force_refresh=False):
     """
-    Computes log returns, excess returns, and Fama-French factor series.
+    Downloads the official Fama-French 3-factor daily data via pandas_datareader.
+    Columns returned (all in decimal, not percent): Mkt-RF, SMB, HML, RF
+
+    Results are cached to FF_CACHE_FILE. Re-downloads the full dataset whenever
+    the cache is stale (the FF dataset is small, ~few MB).
+
+    Args:
+        force_refresh: If True, ignore cache and re-download
+    Returns:
+        DataFrame indexed by date with columns Mkt-RF, SMB, HML, RF
+    """
+    if not force_refresh and os.path.exists(FF_CACHE_FILE):
+        cached = pd.read_parquet(FF_CACHE_FILE)
+        last_cached = cached.index[-1].date()
+        today = END_DATE.date()
+
+        if last_cached >= (today - timedelta(days=5)):  # FF data has a few-day publishing lag
+            print(f"  [FF Cache] Up to date ({last_cached}). Loading from {FF_CACHE_FILE}")
+            return cached
+
+        print(f"  [FF Cache] Stale ({last_cached}). Re-downloading...")
+
+    print("  [FF Cache] Downloading Fama-French daily factors...")
+    raw = pdr.get_data_famafrench('F-F_Research_Data_Factors_daily', start=START_DATE, end=END_DATE)[0]
+    factors = raw / 100  # convert percent → decimal
+    factors.index = pd.to_datetime(factors.index)
+    factors.to_parquet(FF_CACHE_FILE)
+    print(f"  [FF Cache] Saved to {FF_CACHE_FILE}")
+    return factors
+
+
+def compute_returns(raw, ticker, ff_factors):
+    """
+    Computes log returns, excess returns, and aligns official FF factor series.
 
     Args:
         raw: Price DataFrame from fetch_prices
         ticker: Asset ticker string
-        rf_ann: Annualised risk-free rate
+        ff_factors: DataFrame from fetch_ff_factors (Mkt-RF, SMB, HML, RF in decimal)
 
     Returns:
         dict with log_ret, excess_ret, MKT, SMB, HML, factor_vols,
-              prices, S0, T_hist, rf_daily
+              prices, S0, T_hist, rf_daily, rf_ann
     """
-    dt = 1 / 252
-    rf_daily = rf_ann * dt
+    price_series = raw[ticker].dropna()
+    log_ret_series = np.log(price_series / price_series.shift(1)).dropna()
 
-    prices = raw[ticker].values
-    S0 = float(prices[0])
+    # Align FF factors to the dates we have log returns for
+    ff = ff_factors.reindex(log_ret_series.index).dropna()
+    common_idx = log_ret_series.index.intersection(ff.index)
 
-    log_ret = np.log(prices[1:] / prices[:-1])
-    excess_ret = log_ret - rf_daily
+    log_ret = log_ret_series.loc[common_idx].values
+    MKT = ff.loc[common_idx, 'Mkt-RF'].values
+    SMB = ff.loc[common_idx, 'SMB'].values
+    HML = ff.loc[common_idx, 'HML'].values
+    rf_daily_series = ff.loc[common_idx, 'RF'].values
 
-    spy_rets = np.log(raw['SPY'].values[1:] / raw['SPY'].values[:-1])
-    iwm_rets = np.log(raw['IWM'].values[1:] / raw['IWM'].values[:-1])
-    ive_rets = np.log(raw['IVE'].values[1:] / raw['IVE'].values[:-1])
-    ivw_rets = np.log(raw['IVW'].values[1:] / raw['IVW'].values[:-1])
+    rf_daily = rf_daily_series.mean()
+    rf_ann = rf_daily * 252
+    excess_ret = log_ret - rf_daily_series  # day-specific rf
 
-    MKT = spy_rets - rf_daily
-    SMB = iwm_rets - spy_rets
-    HML = ive_rets - ivw_rets
-
+    S0 = float(price_series.iloc[0])
     T_hist = len(log_ret)
     factor_vols = np.array([MKT.std(), SMB.std(), HML.std()])
 
@@ -166,7 +193,7 @@ def compute_returns(raw, ticker, rf_ann):
     print(f"  Skewness               : {stats.skew(log_ret):.3f}")
     print(f"  Excess kurtosis        : {stats.kurtosis(log_ret):.3f}")
     print(f"  {T_hist} trading days  ({START_DATE:%Y-%m-%d} → {END_DATE:%Y-%m-%d})")
-    print(f"  S0 = {S0:.2f},  S_final = {float(prices[-1]):.2f}")
+    print(f"  S0 = {S0:.2f},  S_final = {float(price_series.iloc[-1]):.2f}")
     print(f"  Avg risk-free (ann.) = {rf_ann:.2%}")
 
     return {
@@ -176,10 +203,11 @@ def compute_returns(raw, ticker, rf_ann):
         "SMB": SMB,
         "HML": HML,
         "factor_vols": factor_vols,
-        "prices": prices,
+        "prices": price_series.values,
         "S0": S0,
         "T_hist": T_hist,
         "rf_daily": rf_daily,
+        "rf_ann": rf_ann,
     }
 
 
@@ -670,7 +698,9 @@ def _run():
     portfolio_df = load_portfolio("portfolio.csv")
     tickers = portfolio_df['ticker'].tolist()
 
-    raw_prices, rf_ann, rf_daily = fetch_prices(tickers)
+    raw_prices = fetch_prices(tickers)
+    ff_factors = fetch_ff_factors()
+    rf_ann = float(ff_factors['RF'].mean() * 252)
 
     results = []
     returns_dict = {}   # {ticker: log_ret} for covariance matrix
@@ -681,8 +711,8 @@ def _run():
         print(f"  {ticker}")
         print(f"{'='*60}")
         try:
-            ret = compute_returns(raw_prices, ticker, rf_ann)
-            fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], rf_ann)
+            ret = compute_returns(raw_prices, ticker, ff_factors)
+            fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"])
             g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"])
             mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]))
             val = fetch_valuation_metrics(ticker)
