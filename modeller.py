@@ -17,13 +17,16 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
 import yfinance as yf
-import pandas_datareader as pdr
-from datetime import datetime, timedelta
+import requests, zipfile, io
+from datetime import datetime, timedelta, date
 from pypfopt import EfficientFrontier
 from scipy.optimize import minimize
 import time
 import os
 import sys
+import json
+import traceback
+from pathlib import Path
 
 
 class _Tee:
@@ -47,22 +50,50 @@ LOOKBACK_DAYS = 5 * 365
 START_DATE = END_DATE - timedelta(days=LOOKBACK_DAYS)
 CACHE_FILE = "prices_cache.parquet"
 FF_CACHE_FILE = "ff_factors_cache.parquet"
+USERS_DIR = Path("users")
 
 
-def load_portfolio(csv_path):
+def discover_users() -> list[Path]:
+    """
+    Returns a list of user directories
+    
+    Returns:
+        List of user directories
+    """
+    return [
+        p for p in USERS_DIR.iterdir()
+        if p.is_dir() and (p / "config.json").exists() and (p / "portfolio.csv").exists()
+    ]
+    
+
+def load_portfolio(user_path):
     """
     Fetches the current portfolio tickers and weights from the CSV file.
     Args:
-        csv_path: Path to the csv file
+        user_path: Path to the users folder
     Returns:
         DataFrame object of current holdings
     """
-    return pd.read_csv(csv_path)
+    user_dir = Path(user_path)
+    return pd.read_csv(user_dir / "portfolio.csv")
+
+
+def load_config(user_path):
+    """
+    Loads the config file for the specified user
+    Args:
+        user_path: Path to the users folder
+    Returns:
+        json object of user details
+    """
+    user_dir = Path(user_path)
+    with open(user_dir / 'config.json') as f:
+        return json.load(f)
 
 
 def _download_with_retry(tickers, start, end):
     for attempt in range(5):
-        wait = 5 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
+        wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
         try:
             data = yf.download(
                 tickers, start=start, end=end,
@@ -145,9 +176,23 @@ def fetch_ff_factors(force_refresh=False):
         print(f"  [FF Cache] Stale ({last_cached}). Re-downloading...")
 
     print("  [FF Cache] Downloading Fama-French daily factors...")
-    raw = pdr.get_data_famafrench('F-F_Research_Data_Factors_daily', start=START_DATE, end=END_DATE)[0]
+    url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_daily_CSV.zip"
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        csv_name = [n for n in z.namelist() if n.endswith('.CSV')][0]
+        with z.open(csv_name) as f:
+            # Skip the header description rows until we hit the data
+            raw = pd.read_csv(f, skiprows=3, index_col=0)
+
+    # Drop the footer rows (non-date index values)
+    raw = raw[pd.to_numeric(raw.index, errors='coerce').notna()]
+    raw.index = pd.to_datetime(raw.index, format='%Y%m%d')
+    raw.columns = raw.columns.str.strip()
+
     factors = raw / 100  # convert percent → decimal
-    factors.index = pd.to_datetime(factors.index)
+    factors = factors.loc[START_DATE:END_DATE]
     factors.to_parquet(FF_CACHE_FILE)
     print(f"  [FF Cache] Saved to {FF_CACHE_FILE}")
     return factors
@@ -489,7 +534,7 @@ def run_optimisation(mu_dict, cov_matrix, rf_ann):
     return {"max_sharpe": weights_sharpe, "min_vol": weights_minvol}
 
 
-def print_recommendation(portfolio_df, opt_weights, scenario_name):
+def print_recommendation(portfolio_df, opt_weights, scenario_name, file=None):
     """
     Compares optimised weights to current holdings and prints BUY/SELL/HOLD signals.
 
@@ -497,12 +542,13 @@ def print_recommendation(portfolio_df, opt_weights, scenario_name):
         portfolio_df: DataFrame with 'ticker' and 'weight' columns
         opt_weights: {ticker: target_weight} from run_optimisation
         scenario_name: Label string e.g. 'Max Sharpe'
+        file: File object to write to (defaults to stdout)
     """
     current = dict(zip(portfolio_df['ticker'], portfolio_df['weight']))
     threshold = 0.02
 
-    print(f"\n--- {scenario_name} Rebalancing ---")
-    print(f"{'Ticker':<8} {'Current':>10} {'Target':>10} {'Delta':>10} {'Signal':>8}")
+    print(f"\n--- {scenario_name} Rebalancing ---", file=file)
+    print(f"{'Ticker':<8} {'Current':>10} {'Target':>10} {'Delta':>10} {'Signal':>8}", file=file)
     for ticker, target in opt_weights.items():
         current_w = current.get(ticker, 0.0)
         delta = target - current_w
@@ -512,7 +558,7 @@ def print_recommendation(portfolio_df, opt_weights, scenario_name):
             signal = "SELL"
         else:
             signal = "HOLD"
-        print(f"{ticker:<8} {current_w:>10.1%} {target:>10.1%} {delta:>+10.1%} {signal:>8}")
+        print(f"{ticker:<8} {current_w:>10.1%} {target:>10.1%} {delta:>+10.1%} {signal:>8}", file=file)
 
 
 def compute_confidence_score(n_obs, r_squared, garch_persist):
@@ -531,7 +577,7 @@ def compute_confidence_score(n_obs, r_squared, garch_persist):
     return score, confidence
 
 
-def plot_outputs(ticker, ret, fm, g, mc):
+def plot_outputs(ticker, ret, fm, g, mc, user_path):
     """
     Generates a 7-panel analysis dashboard for a single ticker.
 
@@ -676,94 +722,117 @@ def plot_outputs(ticker, ret, fm, g, mc):
     )
 
     filename = f"{ticker}_asset_price_model.png"
-    plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor=DARK)
+    path = user_path / "reports" / filename
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=DARK)
     plt.close()
-    print(f"\n[Done]  Plot saved to {filename}")
+    print(f"\n[Done]  Plot saved to {path}")     
 
 
-def main():
-    report_path = f"analysis_report_{datetime.today().strftime('%Y%m%d_%H%M%S')}.txt"
-    report_file = open(report_path, 'w', encoding='utf-8')
-    sys.stdout = _Tee(report_file)
-
-    try:
-        _run()
-    finally:
-        sys.stdout = sys.__stdout__
-        report_file.close()
-        print(f"\n[Report] Saved to {report_path}")
-
-
-def _run():
-    portfolio_df = load_portfolio("portfolio.csv")
+def run_user_pipeline(user_path):
+    """
+    Core Pipeline for a single User.
+    """
+    config = load_config(user_path)
+    name = config["name"]    
+    portfolio_df = load_portfolio(user_path)
     tickers = portfolio_df['ticker'].tolist()
+    extra = config.get("extra_tickers", [])
+    all_tickers = list(set(tickers + extra)) 
+    
+    today = date.today().isoformat()
+    report_dir = user_path / "reports" / f"{today}"
+    report_dir.mkdir(exist_ok=True)
+    output_path = report_dir / f"recommendation_{today}.txt"   
 
-    raw_prices = fetch_prices(tickers)
+    raw_prices = fetch_prices(all_tickers)
     ff_factors = fetch_ff_factors()
     rf_ann = float(ff_factors['RF'].mean() * 252)
 
     results = []
     returns_dict = {}   # {ticker: log_ret} for covariance matrix
     mu_dict = {}        # {ticker: mu_annual} for optimisation
+    
+    with open(output_path, 'a') as f:
+        f.write(f"\n{'='*60}")
+        f.write(f"  {name} - {today}")
+        f.write(f"{'='*60}")
+        for ticker in all_tickers:
+            f.write(f"\n{'='*60}")
+            f.write(f"  {ticker}")
+            f.write(f"{'='*60}")
+            try:
+                ret = compute_returns(raw_prices, ticker, ff_factors)
+                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"])
+                g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"])
+                mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]))
+                val = fetch_valuation_metrics(ticker)
+                score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
 
-    for ticker in tickers:
-        print(f"\n{'='*60}")
-        print(f"  {ticker}")
-        print(f"{'='*60}")
+                plot_outputs(ticker, ret, fm, g, mc, report_dir)
+
+                returns_dict[ticker] = ret["log_ret"]
+                mu_dict[ticker] = fm["mu_annual"]
+
+                results.append({
+                    "ticker": ticker,
+                    "mu_annual": fm["mu_annual"],
+                    "sigma_annual": g["sigma_total_annual"],
+                    "VaR_95": mc["VaR_95"],
+                    "CVaR_95": mc["CVaR_95"],
+                    "E_ST": mc["E_ST"],
+                    "prob_up": mc["prob_up"],
+                    "confidence": conf,
+                    "confidence_score": score,
+                    **val,
+                })
+
+            except Exception as e:
+                f.write(f"  [WARN] {ticker} failed: {e}")
+
+        # ── Compute current market weights from shares × latest price ────────────
+        last_prices = raw_prices[tickers].iloc[-1]
+        portfolio_df['price'] = portfolio_df['ticker'].map(last_prices)
+        portfolio_df['market_value'] = portfolio_df['shares'] * portfolio_df['price']
+        total_value = portfolio_df['market_value'].sum()
+        portfolio_df['weight'] = portfolio_df['market_value'] / total_value
+
+        # ── Portfolio-level optimisation ─────────────────────────────────────────
+        if len(returns_dict) >= 2:
+            f.write(f"\n{'='*60}")
+            f.write("  Portfolio Optimisation")
+            f.write(f"{'='*60}")
+            cov_matrix = build_covariance(returns_dict)
+            opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
+            print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe", file=f)
+            print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility", file=f)
+        else:
+            print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
+
+        # ── Per-ticker summary table ──────────────────────────────────────────────
+        if results:
+            df_results = pd.DataFrame(results)
+            df_results.to_csv(output_path, sep='\t', index=False)
+    
+    output_path.close()
+
+
+def main():
+    users = discover_users()
+    results = {"success": [], "failed": []}
+    
+    for user_path in users:
         try:
-            ret = compute_returns(raw_prices, ticker, ff_factors)
-            fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"])
-            g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"])
-            mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]))
-            val = fetch_valuation_metrics(ticker)
-            score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
-
-            plot_outputs(ticker, ret, fm, g, mc)
-
-            returns_dict[ticker] = ret["log_ret"]
-            mu_dict[ticker] = fm["mu_annual"]
-
-            results.append({
-                "ticker": ticker,
-                "mu_annual": fm["mu_annual"],
-                "sigma_annual": g["sigma_total_annual"],
-                "VaR_95": mc["VaR_95"],
-                "CVaR_95": mc["CVaR_95"],
-                "E_ST": mc["E_ST"],
-                "prob_up": mc["prob_up"],
-                "confidence": conf,
-                **val,
-            })
-
+            run_user_pipeline(user_path)
+            results["success"].append(user_path.name)
         except Exception as e:
-            print(f"  [WARN] {ticker} failed: {e}")
-
-    # ── Compute current market weights from shares × latest price ────────────
-    last_prices = raw_prices[tickers].iloc[-1]
-    portfolio_df['price'] = portfolio_df['ticker'].map(last_prices)
-    portfolio_df['market_value'] = portfolio_df['shares'] * portfolio_df['price']
-    total_value = portfolio_df['market_value'].sum()
-    portfolio_df['weight'] = portfolio_df['market_value'] / total_value
-
-    # ── Portfolio-level optimisation ─────────────────────────────────────────
-    if len(returns_dict) >= 2:
-        print(f"\n{'='*60}")
-        print("  Portfolio Optimisation")
-        print(f"{'='*60}")
-        cov_matrix = build_covariance(returns_dict)
-        opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
-        print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe")
-        print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility")
-    else:
-        print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
-
-    # ── Per-ticker summary table ──────────────────────────────────────────────
-    if results:
-        df_results = pd.DataFrame(results)
-        print(f"\n{'='*60}")
-        print("  Per-Ticker Summary")
-        print(f"{'='*60}")
-        print(df_results.to_string(index=False))
+            print(f"\n  ✗ FAILED for {user_path.name}: {e}")
+            traceback.print_exc()
+            results["failed"].append(user_path.name)
+    
+    print(f"\n{'='*60}")
+    print(f"  Pipeline complete.")
+    print(f"  Success: {results['success']}")
+    print(f"  Failed:  {results['failed']}") 
 
 
 if __name__ == "__main__":
