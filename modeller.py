@@ -11,6 +11,7 @@ Steps:
 """
 
 import numpy as np
+import pprint
 import pandas as pd
 import scipy.stats as stats
 import matplotlib.pyplot as plt
@@ -50,6 +51,7 @@ LOOKBACK_DAYS = 5 * 365
 START_DATE = END_DATE - timedelta(days=LOOKBACK_DAYS)
 CACHE_FILE = "prices_cache.parquet"
 FF_CACHE_FILE = "ff_factors_cache.parquet"
+VAL_CACHE_FILE = "valuation_cache.json"
 USERS_DIR = Path("users")
 
 
@@ -185,7 +187,7 @@ def fetch_ff_factors(force_refresh=False):
     response.raise_for_status()
 
     with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-        csv_name = [n for n in z.namelist() if n.endswith('.CSV')][0]
+        csv_name = [n for n in z.namelist() if n.endswith('.csv')][0]
         with z.open(csv_name) as f:
             # Skip the header description rows until we hit the data
             raw = pd.read_csv(f, skiprows=3, index_col=0)
@@ -202,7 +204,7 @@ def fetch_ff_factors(force_refresh=False):
     return factors
 
 
-def compute_returns(raw, ticker, ff_factors):
+def compute_returns(raw, ticker, ff_factors, file=None):
     """
     Computes log returns, excess returns, and aligns official FF factor series.
 
@@ -236,14 +238,14 @@ def compute_returns(raw, ticker, ff_factors):
     T_hist = len(log_ret)
     factor_vols = np.array([MKT.std(), SMB.std(), HML.std()])
 
-    print(f"\n[Returns — {ticker}]")
-    print(f"  Annualised mean return : {log_ret.mean() * 252:.2%}")
-    print(f"  Annualised hist. vol   : {log_ret.std() * np.sqrt(252):.2%}")
-    print(f"  Skewness               : {stats.skew(log_ret):.3f}")
-    print(f"  Excess kurtosis        : {stats.kurtosis(log_ret):.3f}")
-    print(f"  {T_hist} trading days  ({START_DATE:%Y-%m-%d} → {END_DATE:%Y-%m-%d})")
-    print(f"  S0 = {S0:.2f},  S_final = {float(price_series.iloc[-1]):.2f}")
-    print(f"  Avg risk-free (ann.) = {rf_ann:.2%}")
+    print(f"\n[Returns — {ticker}]", file=file)
+    print(f"  Annualised mean return : {log_ret.mean() * 252:.2%}", file=file)
+    print(f"  Annualised hist. vol   : {log_ret.std() * np.sqrt(252):.2%}", file=file)
+    print(f"  Skewness               : {stats.skew(log_ret):.3f}", file=file)
+    print(f"  Excess kurtosis        : {stats.kurtosis(log_ret):.3f}", file=file)
+    print(f"  {T_hist} trading days  ({START_DATE:%Y-%m-%d} → {END_DATE:%Y-%m-%d})", file=file)
+    print(f"  S0 = {S0:.2f},  S_final = {float(price_series.iloc[-1]):.2f}", file=file)
+    print(f"  Avg risk-free (ann.) = {rf_ann:.2%}", file=file)
 
     return {
         "log_ret": log_ret,
@@ -260,7 +262,7 @@ def compute_returns(raw, ticker, ff_factors):
     }
 
 
-def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann):
+def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, file=None):
     """
     Runs 3-factor OLS regression on excess returns.
 
@@ -294,14 +296,14 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann):
     R2_adj = 1 - (1 - R2) * (n - 1) / (n - k)
 
     labels = ["Alpha (daily)", "Beta_MKT", "Beta_SMB", "Beta_HML"]
-    print("\n[Factor Model Regression]")
-    print(f"  {'Parameter':<18} {'Estimate':>10} {'Std Err':>10} {'t-stat':>8} {'p-value':>8}")
-    print("  " + "-" * 60)
+    print("\n[Factor Model Regression]", file=file)
+    print(f"  {'Parameter':<18} {'Estimate':>10} {'Std Err':>10} {'t-stat':>8} {'p-value':>8}", file=file)
+    print("  " + "-" * 60, file=file)
     for i, lbl in enumerate(labels):
         sig = "***" if p_vals[i] < 0.001 else "**" if p_vals[i] < 0.01 else "*" if p_vals[i] < 0.05 else ""
-        print(f"  {lbl:<18} {betas[i]:>10.6f} {se[i]:>10.6f} {t_stats[i]:>8.2f} {p_vals[i]:>8.4f} {sig}")
-    print(f"\n  R²      = {R2:.4f}")
-    print(f"  Adj. R² = {R2_adj:.4f}")
+        print(f"  {lbl:<18} {betas[i]:>10.6f} {se[i]:>10.6f} {t_stats[i]:>8.2f} {p_vals[i]:>8.4f} {sig}", file=file)
+    print(f"\n  R²      = {R2:.4f}", file=file)
+    print(f"  Adj. R² = {R2_adj:.4f}", file=file)
 
     alpha_daily = betas[0]
     b_MKT, b_SMB, b_HML = betas[1], betas[2], betas[3]
@@ -318,7 +320,7 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann):
         + b_SMB * factor_annual_means[1]
         + b_HML * factor_annual_means[2]
     )
-    print(f"\n  Estimated annualised mu  : {mu_annual:.2%}")
+    print(f"\n  Estimated annualised mu  : {mu_annual:.2%}", file=file)
 
     return {
         "alpha_daily": alpha_daily,
@@ -348,7 +350,7 @@ def garch_neg_log_likelihood(params, returns):
     return ll
 
 
-def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML):
+def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
     """
     Fits GARCH(1,1) to OLS residuals and computes total asset volatility.
 
@@ -385,14 +387,14 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML):
         + h_garch[-1] * 252
     )
 
-    print("\n[GARCH(1,1) on Idiosyncratic Residuals]")
-    print(f"  omega               : {omega_g:.2e}")
-    print(f"  alpha (ARCH)        : {alpha_g_est:.4f}")
-    print(f"  beta  (GARCH)       : {beta_g_est:.4f}")
-    print(f"  Persistence (α+β)   : {garch_persist:.4f}")
-    print(f"  Long-run vol (ann.) : {garch_long_run_vol:.2%}")
-    print(f"  Current cond. vol   : {sigma_current_daily * np.sqrt(252):.2%} (annualised idiosyncratic)")
-    print(f"  Total asset vol     : {sigma_total_annual:.2%} (annualised)")
+    print("\n[GARCH(1,1) on Idiosyncratic Residuals]", file=file)
+    print(f"  omega               : {omega_g:.2e}", file=file)
+    print(f"  alpha (ARCH)        : {alpha_g_est:.4f}", file=file)
+    print(f"  beta  (GARCH)       : {beta_g_est:.4f}", file=file)
+    print(f"  Persistence (α+β)   : {garch_persist:.4f}", file=file)
+    print(f"  Long-run vol (ann.) : {garch_long_run_vol:.2%}", file=file)
+    print(f"  Current cond. vol   : {sigma_current_daily * np.sqrt(252):.2%} (annualised idiosyncratic)", file=file)
+    print(f"  Total asset vol     : {sigma_total_annual:.2%} (annualised)", file=file)
 
     return {
         "h_garch": h_garch,
@@ -403,7 +405,7 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML):
     }
 
 
-def run_monte_carlo(mu, sigma, S0):
+def run_monte_carlo(mu, sigma, S0, file=None):
     """
     Simulates 10,000 GBM paths with Student-t innovations over 252 trading days.
 
@@ -422,13 +424,13 @@ def run_monte_carlo(mu, sigma, S0):
     df_t = 6
     t_scale = np.sqrt((df_t - 2) / df_t)
 
-    print(f"\n[Monte Carlo Simulation]")
-    print(f"  Paths      : {N_paths:,}")
-    print(f"  Steps      : {N_steps} days")
-    print(f"  mu         : {mu:.2%} p.a.")
-    print(f"  sigma      : {sigma:.2%} p.a.")
-    print(f"  Innovation : Student-t (df={df_t})")
-    print(f"  S_current  : {S_current:.2f}")
+    print(f"\n[Monte Carlo Simulation]", file=file)
+    print(f"  Paths      : {N_paths:,}", file=file)
+    print(f"  Steps      : {N_steps} days", file=file)
+    print(f"  mu         : {mu:.2%} p.a.", file=file)
+    print(f"  sigma      : {sigma:.2%} p.a.", file=file)
+    print(f"  Innovation : Student-t (df={df_t})", file=file)
+    print(f"  S_current  : {S_current:.2f}", file=file)
 
     dt_sim = 1 / 252
     drift = (mu - 0.5 * sigma ** 2) * dt_sim
@@ -450,19 +452,19 @@ def run_monte_carlo(mu, sigma, S0):
     VaR_95 = np.percentile(losses, 95)
     CVaR_95 = losses[losses >= VaR_95].mean()
 
-    print(f"\n  ── Terminal Price Distribution (S_T) ──")
-    print(f"  E[S_T]              : {E_ST:.2f}")
-    print(f"  Median              : {pct[3]:.2f}")
-    print(f"  Std dev             : {S_T.std():.2f}")
-    print(f"  1st  percentile     : {pct[0]:.2f}")
-    print(f"  5th  percentile     : {pct[1]:.2f}")
-    print(f"  25th percentile     : {pct[2]:.2f}")
-    print(f"  75th percentile     : {pct[4]:.2f}")
-    print(f"  95th percentile     : {pct[5]:.2f}")
-    print(f"  99th percentile     : {pct[6]:.2f}")
-    print(f"\n  Prob(S_T > S_current): {prob_up:.2%}")
-    print(f"  1-year 95% VaR      : {VaR_95:.2f}  ({VaR_95 / S_current:.2%} of price)")
-    print(f"  1-year 95% CVaR     : {CVaR_95:.2f}  ({CVaR_95 / S_current:.2%} of price)")
+    print(f"\n  ── Terminal Price Distribution (S_T) ──", file=file)
+    print(f"  E[S_T]              : {E_ST:.2f}", file=file)
+    print(f"  Median              : {pct[3]:.2f}", file=file)
+    print(f"  Std dev             : {S_T.std():.2f}", file=file)
+    print(f"  1st  percentile     : {pct[0]:.2f}", file=file)
+    print(f"  5th  percentile     : {pct[1]:.2f}", file=file)
+    print(f"  25th percentile     : {pct[2]:.2f}", file=file)
+    print(f"  75th percentile     : {pct[4]:.2f}", file=file)
+    print(f"  95th percentile     : {pct[5]:.2f}", file=file)
+    print(f"  99th percentile     : {pct[6]:.2f}", file=file)
+    print(f"\n  Prob(S_T > S_current): {prob_up:.2%}", file=file)
+    print(f"  1-year 95% VaR      : {VaR_95:.2f}  ({VaR_95 / S_current:.2%} of price)", file=file)
+    print(f"  1-year 95% CVaR     : {CVaR_95:.2f}  ({CVaR_95 / S_current:.2%} of price)", file=file)
 
     return {
         "paths": paths,
@@ -480,9 +482,9 @@ def run_monte_carlo(mu, sigma, S0):
     }
 
 
-def fetch_valuation_metrics(ticker: str) -> dict:
+def fetch_valuation_metrics(ticker):
     """
-    Fetches valuation metrics for ticker from yfinance.
+    Fetches valuation metrics for ticker from yfinance, with a daily JSON cache.
 
     Args:
         ticker: Ticker whose information is required
@@ -490,16 +492,32 @@ def fetch_valuation_metrics(ticker: str) -> dict:
     Returns:
         dict: Valuation metrics for ticker
     """
+    today = str(date.today())
+
+    cache = {}
+    if os.path.exists(VAL_CACHE_FILE):
+        with open(VAL_CACHE_FILE, encoding='utf-8') as f:
+            cache = json.load(f)
+
+    entry = cache.get(ticker, {})
+    if entry.get('date') == today:
+        print(f"  [Val Cache] {ticker}: loaded from cache.")
+        return entry['metrics']
+
     for attempt in range(4):
         try:
             info = yf.Ticker(ticker).info
             time.sleep(2)
-            return {
+            metrics = {
                 'peg': info.get('pegRatio'),
                 'fwd_pe': info.get('forwardPE'),
                 'ttm_pe': info.get('trailingPE'),
                 'ev_ebitda': info.get('enterpriseToEbitda'),
             }
+            cache[ticker] = {'date': today, 'metrics': metrics}
+            with open(VAL_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cache, f)
+            return metrics
         except Exception as e:
             wait = 30 * (attempt + 1)
             if attempt < 3:
@@ -737,7 +755,7 @@ def plot_outputs(ticker, ret, fm, g, mc, user_path):
     )
 
     filename = f"{ticker}_asset_price_model.png"
-    path = user_path / "reports" / filename
+    path = user_path / filename
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=DARK)
     plt.close()
     print(f"\n[Done]  Plot saved to {path}")     
@@ -767,7 +785,7 @@ def run_user_pipeline(user_path):
     returns_dict = {}   # {ticker: log_ret} for covariance matrix
     mu_dict = {}        # {ticker: mu_annual} for optimisation
     
-    with open(output_path, 'a') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         f.write(f"\n{'='*60}")
         f.write(f"  {name} - {today}")
         f.write(f"{'='*60}")
@@ -776,10 +794,10 @@ def run_user_pipeline(user_path):
             f.write(f"  {ticker}")
             f.write(f"{'='*60}")
             try:
-                ret = compute_returns(raw_prices, ticker, ff_factors)
-                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"])
-                g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"])
-                mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]))
+                ret = compute_returns(raw_prices, ticker, ff_factors, file=f)
+                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], file=f)
+                g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=f)
+                mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]), file=f)
                 val = fetch_valuation_metrics(ticker)
                 score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
 
@@ -821,14 +839,13 @@ def run_user_pipeline(user_path):
             print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe", file=f)
             print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility", file=f)
         else:
+            pprint.pprint(returns_dict)
             print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
 
         # ── Per-ticker summary table ──────────────────────────────────────────────
         if results:
             df_results = pd.DataFrame(results)
             df_results.to_csv(output_path, sep='\t', index=False)
-    
-    output_path.close()
 
 
 def main():
