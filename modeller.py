@@ -132,16 +132,20 @@ def fetch_prices(tickers, force_refresh=False):
         last_cached = cached.index[-1].date()
         today = END_DATE.date()
 
-        if last_cached >= today:
+        if last_cached >= today - timedelta(days=1):
             print(f"  [Cache] Up to date ({last_cached}). Loading from {CACHE_FILE}")
             data = cached
         else:
             gap_start = last_cached + timedelta(days=1)
             print(f"  [Cache] Updating from {gap_start} to {today}...")
             new_data = _download_with_retry(all_tickers, gap_start, END_DATE)
-            data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna()
-            data.to_parquet(CACHE_FILE)
-            print(f"  [Cache] Updated and saved to {CACHE_FILE}")
+            if not new_data.empty:
+                data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna()
+                data.to_parquet(CACHE_FILE)
+                print(f"  [Cache] Updated and saved to {CACHE_FILE}")
+            else:
+                print(f"  [Cache] No new rows available yet, using cached data.")
+                data = cached
     else:
         print("  [Cache] No cache found. Downloading full history...")
         data = _download_with_retry(all_tickers, START_DATE, END_DATE)
@@ -486,13 +490,24 @@ def fetch_valuation_metrics(ticker: str) -> dict:
     Returns:
         dict: Valuation metrics for ticker
     """
-    info = yf.Ticker(ticker).info
-    return {
-        'peg': info.get('pegRatio'),
-        'fwd_pe': info.get('forwardPE'),
-        'ttm_pe': info.get('trailingPE'),
-        'ev_ebitda': info.get('enterpriseToEbitda'),
-    }
+    for attempt in range(4):
+        try:
+            info = yf.Ticker(ticker).info
+            time.sleep(2)
+            return {
+                'peg': info.get('pegRatio'),
+                'fwd_pe': info.get('forwardPE'),
+                'ttm_pe': info.get('trailingPE'),
+                'ev_ebitda': info.get('enterpriseToEbitda'),
+            }
+        except Exception as e:
+            wait = 30 * (attempt + 1)
+            if attempt < 3:
+                print(f'  [WARN] {ticker} metrics failed ({e}). Retrying in {wait}s...')
+                time.sleep(wait)
+            else:
+                print(f'  [WARN] {ticker} metrics unavailable after 4 attempts, skipping.')
+                return {'peg': None, 'fwd_pe': None, 'ttm_pe': None, 'ev_ebitda': None}
 
 
 def build_covariance(returns_dict):
