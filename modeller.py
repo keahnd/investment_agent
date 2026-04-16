@@ -28,6 +28,7 @@ import sys
 import json
 import traceback
 from pathlib import Path
+from curl_cffi import requests
 
 
 class _Tee:
@@ -97,9 +98,10 @@ def _download_with_retry(tickers, start, end):
     for attempt in range(5):
         wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
         try:
+            session = requests.Session(impersonate="chrome")
             data = yf.download(
                 tickers, start=start, end=end,
-                auto_adjust=True, progress=False, threads=False
+                auto_adjust=True, progress=False, threads=False, session=session
             )['Close'].dropna()
             if data.empty:
                 raise ValueError("Download returned empty DataFrame (likely rate limited).")
@@ -131,6 +133,15 @@ def fetch_prices(tickers, force_refresh=False):
 
     if not force_refresh and os.path.exists(CACHE_FILE):
         cached = pd.read_parquet(CACHE_FILE)
+
+        missing_tickers = [t for t in all_tickers if t not in cached.columns]
+        if missing_tickers:
+            print(f"  [Cache] New tickers {missing_tickers} — downloading full history...")
+            new_cols = _download_with_retry(missing_tickers, START_DATE, END_DATE)
+            cached = cached.join(new_cols, how='left')
+            cached.to_parquet(CACHE_FILE)
+            print(f"  [Cache] New tickers added and saved.")
+
         last_cached = cached.index[-1].date()
         today = END_DATE.date()
 
@@ -249,6 +260,7 @@ def compute_returns(raw, ticker, ff_factors, file=None):
 
     return {
         "log_ret": log_ret,
+        "log_ret_series": log_ret_series.loc[common_idx],
         "excess_ret": excess_ret,
         "MKT": MKT,
         "SMB": SMB,
@@ -450,7 +462,7 @@ def run_monte_carlo(mu, sigma, S0, file=None):
 
     losses = S_current - S_T
     VaR_95 = np.percentile(losses, 95)
-    CVaR_95 = losses[losses >= VaR_95].mean()
+    CVaR_95 = losses[losses >= np.percentile(losses, 95, method='lower')].mean()
 
     print(f"\n  ── Terminal Price Distribution (S_T) ──", file=file)
     print(f"  E[S_T]              : {E_ST:.2f}", file=file)
@@ -506,7 +518,8 @@ def fetch_valuation_metrics(ticker):
 
     for attempt in range(4):
         try:
-            info = yf.Ticker(ticker).info
+            session = requests.Session(impersonate="chrome")
+            info = yf.Ticker(ticker, session=session).info
             time.sleep(2)
             metrics = {
                 'peg': info.get('pegRatio'),
@@ -803,7 +816,7 @@ def run_user_pipeline(user_path):
 
                 plot_outputs(ticker, ret, fm, g, mc, report_dir)
 
-                returns_dict[ticker] = ret["log_ret"]
+                returns_dict[ticker] = ret["log_ret_series"]
                 mu_dict[ticker] = fm["mu_annual"]
 
                 results.append({

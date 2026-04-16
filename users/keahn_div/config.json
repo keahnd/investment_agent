@@ -6,5 +6,5 @@
   "max_allocation_per_asset": 0.10,
   "max_allocation_per_sector": 0.40,
   "min_cash_buffer": 0.05,
-  "extra_tickers": ["BRK-B", "VTI"]
+  "extra_tickers": ["BRK-B", "XEI.TO"]
 }
