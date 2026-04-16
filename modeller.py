@@ -811,7 +811,7 @@ def run_user_pipeline(user_path):
                 fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], file=f)
                 g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=f)
                 mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]), file=f)
-                val = fetch_valuation_metrics(ticker, True)
+                val = fetch_valuation_metrics(ticker)
                 score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
 
                 plot_outputs(ticker, ret, fm, g, mc, report_dir)
