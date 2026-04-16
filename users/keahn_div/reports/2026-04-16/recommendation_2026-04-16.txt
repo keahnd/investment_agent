@@ -1,224 +1,114 @@
 
 ============================================================  Keahn Divecha - 2026-04-16============================================================
-============================================================  GOOG============================================================
-[Returns — GOOG]
-  Annualised mean return : 21.16%
-  Annualised hist. vol   : 31.01%
-  Skewness               : -0.091
-  Excess kurtosis        : 3.225
-  1194 trading days  (2021-04-17 → 2026-04-16)
-  S0 = 114.18,  S_final = 334.49
-  Avg risk-free (ann.) = 3.50%
+============================================================  NVDA============================================================
+[Returns — NVDA]
+  Annualised mean return : 50.52%
+  Annualised hist. vol   : 51.57%
+  Skewness               : 0.255
+  Excess kurtosis        : 3.814
+  1221 trading days  (2021-04-17 → 2026-04-16)
+  S0 = 15.32,  S_final = 197.50
+  Avg risk-free (ann.) = 3.49%
 
 [Factor Model Regression]
   Parameter            Estimate    Std Err   t-stat  p-value
   ------------------------------------------------------------
-  Alpha (daily)        0.000367   0.000405     0.91   0.3653 
-  Beta_MKT             1.126038   0.041009    27.46   0.0000 ***
-  Beta_SMB            -0.267118   0.061848    -4.32   0.0000 ***
-  Beta_HML            -0.393602   0.047200    -8.34   0.0000 ***
+  Alpha (daily)        0.001338   0.000597     2.24   0.0253 *
+  Beta_MKT             1.878818   0.060341    31.14   0.0000 ***
+  Beta_SMB            -0.436827   0.091097    -4.80   0.0000 ***
+  Beta_HML            -1.059893   0.069599   -15.23   0.0000 ***
 
-  R²      = 0.4892
-  Adj. R² = 0.4879
+  R²      = 0.5902
+  Adj. R² = 0.5891
 
-  Estimated annualised mu  : 21.16%
+  Estimated annualised mu  : 50.52%
 
 [GARCH(1,1) on Idiosyncratic Residuals]
-  omega               : 2.18e-05
-  alpha (ARCH)        : 0.0050
-  beta  (GARCH)       : 0.8833
-  Persistence (α+β)   : 0.8883
-  Long-run vol (ann.) : 22.20%
-  Current cond. vol   : 22.22% (annualised idiosyncratic)
-  Total asset vol     : 30.53% (annualised)
+  omega               : 4.08e-05
+  alpha (ARCH)        : 0.0197
+  beta  (GARCH)       : 0.8867
+  Persistence (α+β)   : 0.9064
+  Long-run vol (ann.) : 33.15%
+  Current cond. vol   : 32.57% (annualised idiosyncratic)
+  Total asset vol     : 49.17% (annualised)
 
 [Monte Carlo Simulation]
   Paths      : 10,000
   Steps      : 252 days
-  mu         : 21.16% p.a.
-  sigma      : 30.53% p.a.
+  mu         : 50.52% p.a.
+  sigma      : 49.17% p.a.
   Innovation : Student-t (df=6)
-  S_current  : 334.49
+  S_current  : 197.50
 
   ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 438.84
-  Median              : 394.56
-  Std dev             : 211.83
-  1st  percentile     : 133.72
-  5th  percentile     : 185.66
-  25th percentile     : 289.05
-  75th percentile     : 539.28
-  95th percentile     : 836.17
-  99th percentile     : 1148.46
+  E[S_T]              : 381.71
+  Median              : 290.13
+  Std dev             : 322.49
+  1st  percentile     : 50.80
+  5th  percentile     : 86.17
+  25th percentile     : 175.78
+  75th percentile     : 479.85
+  95th percentile     : 972.41
+  99th percentile     : 1621.01
 
-  Prob(S_T > S_current): 64.32%
-  1-year 95% VaR      : 148.83  (44.50% of price)
-  1-year 95% CVaR     : 180.25  (53.89% of price)
+  Prob(S_T > S_current): 69.91%
+  1-year 95% VaR      : 111.33  (56.37% of price)
+  1-year 95% CVaR     : 132.79  (67.23% of price)
 
 ============================================================  MSFT============================================================
 [Returns — MSFT]
-  Annualised mean return : 9.68%
-  Annualised hist. vol   : 26.58%
-  Skewness               : -0.132
-  Excess kurtosis        : 3.863
-  1194 trading days  (2021-04-17 → 2026-04-16)
-  S0 = 248.28,  S_final = 414.58
-  Avg risk-free (ann.) = 3.50%
+  Annualised mean return : 9.47%
+  Annualised hist. vol   : 26.28%
+  Skewness               : -0.129
+  Excess kurtosis        : 4.003
+  1221 trading days  (2021-04-17 → 2026-04-16)
+  S0 = 248.28,  S_final = 414.30
+  Avg risk-free (ann.) = 3.49%
 
 [Factor Model Regression]
   Parameter            Estimate    Std Err   t-stat  p-value
   ------------------------------------------------------------
-  Alpha (daily)       -0.000089   0.000301    -0.30   0.7668 
-  Beta_MKT             1.045402   0.030492    34.28   0.0000 ***
-  Beta_SMB            -0.452800   0.045987    -9.85   0.0000 ***
-  Beta_HML            -0.492976   0.035095   -14.05   0.0000 ***
+  Alpha (daily)       -0.000126   0.000288    -0.44   0.6610 
+  Beta_MKT             1.051675   0.029109    36.13   0.0000 ***
+  Beta_SMB            -0.453621   0.043946   -10.32   0.0000 ***
+  Beta_HML            -0.496171   0.033575   -14.78   0.0000 ***
 
-  R²      = 0.6155
-  Adj. R² = 0.6145
+  R²      = 0.6328
+  Adj. R² = 0.6319
 
-  Estimated annualised mu  : 9.68%
+  Estimated annualised mu  : 9.47%
 
 [GARCH(1,1) on Idiosyncratic Residuals]
-  omega               : 1.05e-05
-  alpha (ARCH)        : 0.0171
-  beta  (GARCH)       : 0.8860
-  Persistence (α+β)   : 0.9031
-  Long-run vol (ann.) : 16.53%
-  Current cond. vol   : 19.00% (annualised idiosyncratic)
-  Total asset vol     : 27.92% (annualised)
+  omega               : 9.55e-06
+  alpha (ARCH)        : 0.0222
+  beta  (GARCH)       : 0.8840
+  Persistence (α+β)   : 0.9062
+  Long-run vol (ann.) : 16.02%
+  Current cond. vol   : 19.24% (annualised idiosyncratic)
+  Total asset vol     : 28.13% (annualised)
 
 [Monte Carlo Simulation]
   Paths      : 10,000
   Steps      : 252 days
-  mu         : 9.68% p.a.
-  sigma      : 27.92% p.a.
+  mu         : 9.47% p.a.
+  sigma      : 28.13% p.a.
   Innovation : Student-t (df=6)
-  S_current  : 414.58
+  S_current  : 414.30
 
   ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 479.39
-  Median              : 440.66
-  Std dev             : 208.03
-  1st  percentile     : 168.65
-  5th  percentile     : 222.58
-  25th percentile     : 333.70
-  75th percentile     : 582.56
-  95th percentile     : 870.04
-  99th percentile     : 1167.81
+  E[S_T]              : 478.39
+  Median              : 439.17
+  Std dev             : 209.30
+  1st  percentile     : 166.88
+  5th  percentile     : 220.70
+  25th percentile     : 331.89
+  75th percentile     : 581.81
+  95th percentile     : 871.54
+  99th percentile     : 1172.41
 
-  Prob(S_T > S_current): 55.45%
-  1-year 95% VaR      : 192.00  (46.31% of price)
-  1-year 95% CVaR     : 226.15  (54.55% of price)
-
-============================================================  NVDA============================================================
-[Returns — NVDA]
-  Annualised mean return : 51.66%
-  Annualised hist. vol   : 51.79%
-  Skewness               : 0.263
-  Excess kurtosis        : 3.827
-  1194 trading days  (2021-04-17 → 2026-04-16)
-  S0 = 15.32,  S_final = 197.48
-  Avg risk-free (ann.) = 3.50%
-
-[Factor Model Regression]
-  Parameter            Estimate    Std Err   t-stat  p-value
-  ------------------------------------------------------------
-  Alpha (daily)        0.001405   0.000612     2.30   0.0218 *
-  Beta_MKT             1.895714   0.061884    30.63   0.0000 ***
-  Beta_SMB            -0.475054   0.093330    -5.09   0.0000 ***
-  Beta_HML            -1.013742   0.071227   -14.23   0.0000 ***
-
-  R²      = 0.5828
-  Adj. R² = 0.5818
-
-  Estimated annualised mu  : 51.66%
-
-[GARCH(1,1) on Idiosyncratic Residuals]
-  omega               : 4.11e-05
-  alpha (ARCH)        : 0.0213
-  beta  (GARCH)       : 0.8871
-  Persistence (α+β)   : 0.9083
-  Long-run vol (ann.) : 33.60%
-  Current cond. vol   : 32.89% (annualised idiosyncratic)
-  Total asset vol     : 49.50% (annualised)
-
-[Monte Carlo Simulation]
-  Paths      : 10,000
-  Steps      : 252 days
-  mu         : 51.66% p.a.
-  sigma      : 49.50% p.a.
-  Innovation : Student-t (df=6)
-  S_current  : 197.48
-
-  ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 393.58
-  Median              : 296.16
-  Std dev             : 345.77
-  1st  percentile     : 54.03
-  5th  percentile     : 88.09
-  25th percentile     : 179.60
-  75th percentile     : 487.85
-  95th percentile     : 1009.72
-  99th percentile     : 1733.31
-
-  Prob(S_T > S_current): 70.95%
-  1-year 95% VaR      : 109.39  (55.39% of price)
-  1-year 95% CVaR     : 129.65  (65.65% of price)
-
-============================================================  AMZN============================================================
-[Returns — AMZN]
-  Annualised mean return : 4.63%
-  Annualised hist. vol   : 35.90%
-  Skewness               : -0.085
-  Excess kurtosis        : 4.894
-  1194 trading days  (2021-04-17 → 2026-04-16)
-  S0 = 168.60,  S_final = 245.28
-  Avg risk-free (ann.) = 3.50%
-
-[Factor Model Regression]
-  Parameter            Estimate    Std Err   t-stat  p-value
-  ------------------------------------------------------------
-  Alpha (daily)       -0.000307   0.000434    -0.71   0.4791 
-  Beta_MKT             1.347724   0.043888    30.71   0.0000 ***
-  Beta_SMB            -0.168469   0.066190    -2.55   0.0110 *
-  Beta_HML            -0.539617   0.050514   -10.68   0.0000 ***
-
-  R²      = 0.5634
-  Adj. R² = 0.5623
-
-  Estimated annualised mu  : 4.63%
-
-[GARCH(1,1) on Idiosyncratic Residuals]
-  omega               : 1.39e-04
-  alpha (ARCH)        : 0.4288
-  beta  (GARCH)       : 0.0604
-  Persistence (α+β)   : 0.4891
-  Long-run vol (ann.) : 26.17%
-  Current cond. vol   : 19.67% (annualised idiosyncratic)
-  Total asset vol     : 31.94% (annualised)
-
-[Monte Carlo Simulation]
-  Paths      : 10,000
-  Steps      : 252 days
-  mu         : 4.63% p.a.
-  sigma      : 31.94% p.a.
-  Innovation : Student-t (df=6)
-  S_current  : 245.28
-
-  ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 269.21
-  Median              : 240.59
-  Std dev             : 136.93
-  1st  percentile     : 78.57
-  5th  percentile     : 107.54
-  25th percentile     : 174.08
-  75th percentile     : 332.07
-  95th percentile     : 533.63
-  99th percentile     : 739.22
-
-  Prob(S_T > S_current): 48.28%
-  1-year 95% VaR      : 137.73  (56.15% of price)
-  1-year 95% CVaR     : 155.73  (63.49% of price)
+  Prob(S_T > S_current): 55.07%
+  1-year 95% VaR      : 193.60  (46.73% of price)
+  1-year 95% CVaR     : 227.68  (54.96% of price)
 
 ============================================================  XEI.TO============================================================
 [Returns — XEI.TO]
@@ -261,147 +151,266 @@
   S_current  : 36.96
 
   ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 43.06
-  Median              : 42.23
-  Std dev             : 8.53
-  1st  percentile     : 26.72
-  5th  percentile     : 30.54
-  25th percentile     : 37.04
-  75th percentile     : 48.16
-  95th percentile     : 58.50
-  99th percentile     : 66.47
+  E[S_T]              : 43.34
+  Median              : 42.46
+  Std dev             : 8.60
+  1st  percentile     : 27.14
+  5th  percentile     : 30.86
+  25th percentile     : 37.23
+  75th percentile     : 48.42
+  95th percentile     : 58.64
+  99th percentile     : 67.60
 
-  Prob(S_T > S_current): 75.45%
-  1-year 95% VaR      : 6.42  (17.36% of price)
-  1-year 95% CVaR     : 8.80  (23.80% of price)
-
-============================================================  BRK-B============================================================
-[Returns — BRK-B]
-  Annualised mean return : 13.19%
-  Annualised hist. vol   : 17.24%
-  Skewness               : -0.069
-  Excess kurtosis        : 3.696
-  1194 trading days  (2021-04-17 → 2026-04-16)
-  S0 = 270.28,  S_final = 474.33
-  Avg risk-free (ann.) = 3.50%
-
-[Factor Model Regression]
-  Parameter            Estimate    Std Err   t-stat  p-value
-  ------------------------------------------------------------
-  Alpha (daily)       -0.000006   0.000208    -0.03   0.9756 
-  Beta_MKT             0.796715   0.021039    37.87   0.0000 ***
-  Beta_SMB            -0.250721   0.031730    -7.90   0.0000 ***
-  Beta_HML             0.519988   0.024215    21.47   0.0000 ***
-
-  R²      = 0.5648
-  Adj. R² = 0.5637
-
-  Estimated annualised mu  : 13.19%
-
-[GARCH(1,1) on Idiosyncratic Residuals]
-  omega               : 3.16e-06
-  alpha (ARCH)        : 0.0478
-  beta  (GARCH)       : 0.8929
-  Persistence (α+β)   : 0.9408
-  Long-run vol (ann.) : 11.60%
-  Current cond. vol   : 14.56% (annualised idiosyncratic)
-  Total asset vol     : 21.80% (annualised)
-
-[Monte Carlo Simulation]
-  Paths      : 10,000
-  Steps      : 252 days
-  mu         : 13.19% p.a.
-  sigma      : 21.80% p.a.
-  Innovation : Student-t (df=6)
-  S_current  : 474.33
-
-  ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 557.97
-  Median              : 528.59
-  Std dev             : 186.66
-  1st  percentile     : 243.20
-  5th  percentile     : 310.80
-  25th percentile     : 424.36
-  75th percentile     : 657.68
-  95th percentile     : 903.19
-  99th percentile     : 1124.89
-
-  Prob(S_T > S_current): 63.22%
-  1-year 95% VaR      : 163.52  (34.48% of price)
-  1-year 95% CVaR     : 204.93  (43.21% of price)
+  Prob(S_T > S_current): 76.12%
+  1-year 95% VaR      : 6.10  (16.49% of price)
+  1-year 95% CVaR     : 8.32  (22.51% of price)
 
 ============================================================  AAPL============================================================
 [Returns — AAPL]
-  Annualised mean return : 14.75%
-  Annualised hist. vol   : 27.90%
-  Skewness               : 0.230
-  Excess kurtosis        : 5.761
-  1194 trading days  (2021-04-17 → 2026-04-16)
-  S0 = 131.33,  S_final = 262.05
-  Avg risk-free (ann.) = 3.50%
+  Annualised mean return : 14.42%
+  Annualised hist. vol   : 27.51%
+  Skewness               : 0.250
+  Excess kurtosis        : 5.945
+  1221 trading days  (2021-04-17 → 2026-04-16)
+  S0 = 131.33,  S_final = 262.11
+  Avg risk-free (ann.) = 3.49%
 
 [Factor Model Regression]
   Parameter            Estimate    Std Err   t-stat  p-value
   ------------------------------------------------------------
-  Alpha (daily)        0.000057   0.000339     0.17   0.8658 
-  Beta_MKT             1.167346   0.034282    34.05   0.0000 ***
-  Beta_SMB            -0.303832   0.051702    -5.88   0.0000 ***
-  Beta_HML            -0.197458   0.039457    -5.00   0.0000 ***
+  Alpha (daily)       -0.000001   0.000323    -0.00   0.9985 
+  Beta_MKT             1.170159   0.032657    35.83   0.0000 ***
+  Beta_SMB            -0.300206   0.049303    -6.09   0.0000 ***
+  Beta_HML            -0.207044   0.037668    -5.50   0.0000 ***
 
-  R²      = 0.5590
-  Adj. R² = 0.5579
+  R²      = 0.5782
+  Adj. R² = 0.5772
 
-  Estimated annualised mu  : 14.75%
+  Estimated annualised mu  : 14.42%
 
 [GARCH(1,1) on Idiosyncratic Residuals]
-  omega               : 7.43e-06
-  alpha (ARCH)        : 0.0542
-  beta  (GARCH)       : 0.8943
-  Persistence (α+β)   : 0.9485
-  Long-run vol (ann.) : 19.06%
-  Current cond. vol   : 21.87% (annualised idiosyncratic)
-  Total asset vol     : 30.41% (annualised)
+  omega               : 6.61e-06
+  alpha (ARCH)        : 0.0555
+  beta  (GARCH)       : 0.8946
+  Persistence (α+β)   : 0.9501
+  Long-run vol (ann.) : 18.26%
+  Current cond. vol   : 21.63% (annualised idiosyncratic)
+  Total asset vol     : 30.23% (annualised)
 
 [Monte Carlo Simulation]
   Paths      : 10,000
   Steps      : 252 days
-  mu         : 14.75% p.a.
-  sigma      : 30.41% p.a.
+  mu         : 14.42% p.a.
+  sigma      : 30.23% p.a.
   Innovation : Student-t (df=6)
-  S_current  : 262.05
+  S_current  : 262.11
 
   ── Terminal Price Distribution (S_T) ──
-  E[S_T]              : 321.79
-  Median              : 290.83
-  Std dev             : 155.90
-  1st  percentile     : 97.00
-  5th  percentile     : 136.18
-  25th percentile     : 211.33
-  75th percentile     : 396.58
-  95th percentile     : 609.46
-  99th percentile     : 825.55
+  E[S_T]              : 315.45
+  Median              : 285.28
+  Std dev             : 150.97
+  1st  percentile     : 98.92
+  5th  percentile     : 133.14
+  25th percentile     : 210.02
+  75th percentile     : 387.01
+  95th percentile     : 606.31
+  99th percentile     : 825.37
 
-  Prob(S_T > S_current): 59.02%
-  1-year 95% VaR      : 125.87  (48.03% of price)
-  1-year 95% CVaR     : 149.66  (57.11% of price)
+  Prob(S_T > S_current): 57.36%
+  1-year 95% VaR      : 128.97  (49.20% of price)
+  1-year 95% CVaR     : 150.24  (57.32% of price)
+
+============================================================  GOOG============================================================
+[Returns — GOOG]
+  Annualised mean return : 20.69%
+  Annualised hist. vol   : 30.73%
+  Skewness               : -0.096
+  Excess kurtosis        : 3.344
+  1221 trading days  (2021-04-17 → 2026-04-16)
+  S0 = 114.18,  S_final = 334.55
+  Avg risk-free (ann.) = 3.49%
+
+[Factor Model Regression]
+  Parameter            Estimate    Std Err   t-stat  p-value
+  ------------------------------------------------------------
+  Alpha (daily)        0.000313   0.000391     0.80   0.4228 
+  Beta_MKT             1.133214   0.039469    28.71   0.0000 ***
+  Beta_SMB            -0.264963   0.059586    -4.45   0.0000 ***
+  Beta_HML            -0.409079   0.045524    -8.99   0.0000 ***
+
+  R²      = 0.5062
+  Adj. R² = 0.5049
+
+  Estimated annualised mu  : 20.69%
+
+[GARCH(1,1) on Idiosyncratic Residuals]
+  omega               : 2.09e-05
+  alpha (ARCH)        : 0.0153
+  beta  (GARCH)       : 0.8726
+  Persistence (α+β)   : 0.8879
+  Long-run vol (ann.) : 21.67%
+  Current cond. vol   : 21.80% (annualised idiosyncratic)
+  Total asset vol     : 30.31% (annualised)
+
+[Monte Carlo Simulation]
+  Paths      : 10,000
+  Steps      : 252 days
+  mu         : 20.69% p.a.
+  sigma      : 30.31% p.a.
+  Innovation : Student-t (df=6)
+  S_current  : 334.55
+
+  ── Terminal Price Distribution (S_T) ──
+  E[S_T]              : 433.73
+  Median              : 390.72
+  Std dev             : 209.38
+  1st  percentile     : 134.60
+  5th  percentile     : 183.80
+  25th percentile     : 287.97
+  75th percentile     : 530.36
+  95th percentile     : 834.11
+  99th percentile     : 1122.67
+
+  Prob(S_T > S_current): 63.17%
+  1-year 95% VaR      : 150.75  (45.06% of price)
+  1-year 95% CVaR     : 181.26  (54.18% of price)
+
+============================================================  AMZN============================================================
+[Returns — AMZN]
+  Annualised mean return : 4.53%
+  Annualised hist. vol   : 35.47%
+  Skewness               : -0.101
+  Excess kurtosis        : 5.043
+  1221 trading days  (2021-04-17 → 2026-04-16)
+  S0 = 168.60,  S_final = 245.25
+  Avg risk-free (ann.) = 3.49%
+
+[Factor Model Regression]
+  Parameter            Estimate    Std Err   t-stat  p-value
+  ------------------------------------------------------------
+  Alpha (daily)       -0.000355   0.000423    -0.84   0.4022 
+  Beta_MKT             1.341497   0.042757    31.37   0.0000 ***
+  Beta_SMB            -0.176733   0.064551    -2.74   0.0063 **
+  Beta_HML            -0.533550   0.049318   -10.82   0.0000 ***
+
+  R²      = 0.5649
+  Adj. R² = 0.5639
+
+  Estimated annualised mu  : 4.53%
+
+[GARCH(1,1) on Idiosyncratic Residuals]
+  omega               : 1.34e-04
+  alpha (ARCH)        : 0.4368
+  beta  (GARCH)       : 0.0580
+  Persistence (α+β)   : 0.4948
+  Long-run vol (ann.) : 25.89%
+  Current cond. vol   : 19.34% (annualised idiosyncratic)
+  Total asset vol     : 31.58% (annualised)
+
+[Monte Carlo Simulation]
+  Paths      : 10,000
+  Steps      : 252 days
+  mu         : 4.53% p.a.
+  sigma      : 31.58% p.a.
+  Innovation : Student-t (df=6)
+  S_current  : 245.25
+
+  ── Terminal Price Distribution (S_T) ──
+  E[S_T]              : 273.38
+  Median              : 244.20
+  Std dev             : 136.47
+  1st  percentile     : 79.30
+  5th  percentile     : 113.13
+  25th percentile     : 177.64
+  75th percentile     : 335.14
+  95th percentile     : 530.67
+  99th percentile     : 729.37
+
+  Prob(S_T > S_current): 49.58%
+  1-year 95% VaR      : 132.12  (53.87% of price)
+  1-year 95% CVaR     : 152.84  (62.32% of price)
+
+============================================================  BRK-B============================================================
+[Returns — BRK-B]
+  Annualised mean return : 12.90%
+  Annualised hist. vol   : 17.14%
+  Skewness               : -0.101
+  Excess kurtosis        : 3.731
+  1221 trading days  (2021-04-17 → 2026-04-16)
+  S0 = 270.28,  S_final = 474.28
+  Avg risk-free (ann.) = 3.49%
+
+[Factor Model Regression]
+  Parameter            Estimate    Std Err   t-stat  p-value
+  ------------------------------------------------------------
+  Alpha (daily)       -0.000079   0.000202    -0.39   0.6952 
+  Beta_MKT             0.799194   0.020388    39.20   0.0000 ***
+  Beta_SMB            -0.252696   0.030779    -8.21   0.0000 ***
+  Beta_HML             0.521495   0.023516    22.18   0.0000 ***
+
+  R²      = 0.5764
+  Adj. R² = 0.5754
+
+  Estimated annualised mu  : 12.90%
+
+[GARCH(1,1) on Idiosyncratic Residuals]
+  omega               : 2.50e-06
+  alpha (ARCH)        : 0.0572
+  beta  (GARCH)       : 0.8950
+  Persistence (α+β)   : 0.9522
+  Long-run vol (ann.) : 11.49%
+  Current cond. vol   : 15.09% (annualised idiosyncratic)
+  Total asset vol     : 22.16% (annualised)
+
+[Monte Carlo Simulation]
+  Paths      : 10,000
+  Steps      : 252 days
+  mu         : 12.90% p.a.
+  sigma      : 22.16% p.a.
+  Innovation : Student-t (df=6)
+  S_current  : 474.28
+
+  ── Terminal Price Distribution (S_T) ──
+  E[S_T]              : 556.21
+  Median              : 527.63
+  Std dev             : 191.73
+  1st  percentile     : 237.03
+  5th  percentile     : 303.52
+  25th percentile     : 418.09
+  75th percentile     : 661.42
+  95th percentile     : 904.63
+  99th percentile     : 1128.54
+
+  Prob(S_T > S_current): 62.18%
+  1-year 95% VaR      : 170.77  (36.00% of price)
+  1-year 95% CVaR     : 211.19  (44.53% of price)
 
 ============================================================  Portfolio Optimisation============================================================
 --- Max Sharpe Rebalancing ---
 Ticker      Current     Target      Delta   Signal
-GOOG          17.2%       0.0%     -17.2%     SELL
+NVDA           6.8%      16.6%      +9.8%      BUY
 MSFT          28.4%       0.0%     -28.4%     SELL
-NVDA           6.8%      17.1%     +10.3%      BUY
-AMZN          25.2%       0.0%     -25.2%     SELL
-XEI.TO         0.0%      82.9%     +82.9%      BUY
-BRK-B          0.0%       0.0%      +0.0%     HOLD
+XEI.TO         0.0%      83.4%     +83.4%      BUY
 AAPL          22.4%       0.0%     -22.4%     SELL
+GOOG          17.2%       0.0%     -17.2%     SELL
+AMZN          25.2%       0.0%     -25.2%     SELL
+BRK-B          0.0%       0.0%      +0.0%     HOLD
 
 --- Min Volatility Rebalancing ---
 Ticker      Current     Target      Delta   Signal
-GOOG          17.2%       0.0%     -17.2%     SELL
-MSFT          28.4%       4.8%     -23.6%     SELL
 NVDA           6.8%       0.0%      -6.8%     SELL
-AMZN          25.2%       0.0%     -25.2%     SELL
-XEI.TO         0.0%      89.5%     +89.5%      BUY
-BRK-B          0.0%       5.7%      +5.7%      BUY
+MSFT          28.4%       5.2%     -23.2%     SELL
+XEI.TO         0.0%      88.4%     +88.4%      BUY
 AAPL          22.4%       0.0%     -22.4%     SELL
+GOOG          17.2%       0.0%     -17.2%     SELL
+AMZN          25.2%       0.0%     -25.2%     SELL
+BRK-B          0.0%       6.4%      +6.4%      BUY
+
+ticker  mu_annual  sigma_annual  VaR_95  CVaR_95   E_ST  prob_up confidence  confidence_score  peg  fwd_pe  ttm_pe  ev_ebitda
+  NVDA       0.51          0.49  111.33   132.79 381.71     0.70       high              0.84 0.81   17.62   40.39      35.89
+  MSFT       0.09          0.28  193.60   227.68 478.39     0.55       high              0.86 1.33   21.94   25.92      17.62
+XEI.TO       0.14          0.13    6.10     8.32  43.34     0.76       high              0.83  NaN     NaN   15.68        NaN
+  AAPL       0.14          0.30  128.97   150.24 315.45     0.57       high              0.74 2.38   28.14   33.12      25.74
+  GOOG       0.21          0.30  150.75   181.26 433.73     0.63       high              0.83 1.98   24.84   30.92      26.54
+  AMZN       0.05          0.32  132.12   152.84 273.38     0.50       high              0.85 1.91   26.12   34.19      18.69
+ BRK-B       0.13          0.22  170.77   211.19 556.21     0.62       high              0.74  NaN   21.76   15.24      -2.12

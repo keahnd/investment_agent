@@ -494,7 +494,7 @@ def run_monte_carlo(mu, sigma, S0, file=None):
     }
 
 
-def fetch_valuation_metrics(ticker):
+def fetch_valuation_metrics(ticker, force_refresh=False):
     """
     Fetches valuation metrics for ticker from yfinance, with a daily JSON cache.
 
@@ -507,7 +507,7 @@ def fetch_valuation_metrics(ticker):
     today = str(date.today())
 
     cache = {}
-    if os.path.exists(VAL_CACHE_FILE):
+    if not force_refresh and os.path.exists(VAL_CACHE_FILE):
         with open(VAL_CACHE_FILE, encoding='utf-8') as f:
             cache = json.load(f)
 
@@ -522,7 +522,7 @@ def fetch_valuation_metrics(ticker):
             info = yf.Ticker(ticker, session=session).info
             time.sleep(2)
             metrics = {
-                'peg': info.get('pegRatio'),
+                'peg': info.get('trailingPegRatio'),
                 'fwd_pe': info.get('forwardPE'),
                 'ttm_pe': info.get('trailingPE'),
                 'ev_ebitda': info.get('enterpriseToEbitda'),
@@ -811,7 +811,7 @@ def run_user_pipeline(user_path):
                 fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], file=f)
                 g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=f)
                 mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]), file=f)
-                val = fetch_valuation_metrics(ticker)
+                val = fetch_valuation_metrics(ticker, True)
                 score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
 
                 plot_outputs(ticker, ret, fm, g, mc, report_dir)
@@ -858,7 +858,10 @@ def run_user_pipeline(user_path):
         # ── Per-ticker summary table ──────────────────────────────────────────────
         if results:
             df_results = pd.DataFrame(results)
-            df_results.to_csv(output_path, sep='\t', index=False)
+            float_cols = df_results.select_dtypes(include='float').columns
+            df_results[float_cols] = df_results[float_cols].round(2)
+            f.write('\n')
+            f.write(df_results.to_string(index=False))
 
 
 def main():
