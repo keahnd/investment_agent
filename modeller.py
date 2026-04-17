@@ -526,6 +526,12 @@ def fetch_valuation_metrics(ticker, force_refresh=False):
                 'fwd_pe': info.get('forwardPE'),
                 'ttm_pe': info.get('trailingPE'),
                 'ev_ebitda': info.get('enterpriseToEbitda'),
+                'target_price': info.get('targetMeanPrice'),
+                'analyst_rec': info.get('recommendationMean'),
+                '200MA': info.get('twoHundredDayAverage'),
+                '50MA': info.get('fiftyDayAverage'),
+                'earnings_growth': info.get('earningsGrowth'),
+                'revenue_growth': info.get('revenueGrowth'),
             }
             cache[ticker] = {'date': today, 'metrics': metrics}
             with open(VAL_CACHE_FILE, 'w', encoding='utf-8') as f:
