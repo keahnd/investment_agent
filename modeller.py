@@ -344,6 +344,7 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, file=None):
         "residuals": residuals,
         "r_squared": R2,
         "Y_hat": Y_hat,
+        "p_val": p_vals[i]
     }
 
 
@@ -395,6 +396,10 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
         "garch_persist": garch_persist,
         "garch_long_run_vol": garch_long_run_vol,
         "pvalues": pvalues,
+        "omega_garch": omega_g,
+        "alpha_garch": alpha_g_est,
+        "beta_garch": beta_g_est,
+        "sigma_current_vol": sigma_current_daily      
     }
 
 
@@ -757,7 +762,8 @@ def plot_outputs(ticker, ret, fm, g, mc, user_path):
     )
 
     filename = f"{ticker}_asset_price_model.png"
-    path = user_path / filename
+    path = user_path / "asset_analysis" / filename
+    path.mkdir(exist_ok=True)
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=DARK)
     plt.close()
     print(f"\n[Done]  Plot saved to {path}")     
@@ -792,6 +798,7 @@ def run_user_pipeline(user_path):
         rf_ann = float(ff_factors['RF'].mean() * 252)
 
         results = []
+        db_results = []
         returns_dict = {}   # {ticker: log_ret} for covariance matrix
         mu_dict = {}        # {ticker: mu_annual} for optimisation
         
@@ -826,9 +833,52 @@ def run_user_pipeline(user_path):
                         "E_ST": mc["E_ST"],
                         "prob_up": mc["prob_up"],
                         "confidence": conf,
-                        "confidence_score": score,
                         **val,
                     })
+                    
+                    db_results.append({
+                        # Factor Models Info
+                        "alpha_daily": fm["alpha_daily"],
+                        "beta_mkt": fm["b_MKT"],
+                        "beta_smb": fm["b_SMB"],
+                        "beta_hml": fm["b_HML"],
+                        "r_squared": fm["r_squared"],
+                        "alpha_pval": fm["p_val"],
+                        # GARCH Info
+                        "garch_omega": g["omega_garch"],
+                        "garch_alpha": g["alpha_garch"],
+                        "garch_beta": g["beta_garch"],
+                        "garch_persistence": g["garch_persist"],
+                        "garch_longrun_vol": g["garch_long_run_vol"],
+                        "garch_current_vol": g["sigma_current_vol"],
+                        # Annulaised Exp. Return and Exp. Vol
+                        "mu_annual": fm["mu_annual"],
+                        "sigma_annual": g["sigma_total_annual"],
+                        # Monte Carlo Info
+                        "mc_p05": np.percentile(mc["paths"], 5, axis=1),
+                        "mc_p25": np.percentile(mc["paths"], 25, axis=1),
+                        "mc_p50": np.percentile(mc["paths"], 50, axis=1),
+                        "mc_p75": np.percentile(mc["paths"], 75, axis=1),
+                        "mc_p95": np.percentile(mc["paths"], 95, axis=1),
+                        "mc_var95": mc["VaR_95"],
+                        "mc_cvar95": mc["CVaR_95"],
+                        #  Valutation Info
+                        "forward_pe": val["fwd_pe"],
+                        "ttm_pe": val["ttm_pe"],
+                        "peg_ratio": val["peg"],
+                        "ev_ebitda": val["ev_ebitda"],
+                        "target_price": val["target_price"],
+                        "analyst_rec": val["analyst_rec"],
+                        "ma_200": val["200MA"],
+                        "ma_50": val["50MA"],
+                        "earnings_growth": val["earnings_growth"],
+                        "revenue_growth": val["revenue_growth"],
+                        "sector": val["sector"],
+                        "industry": val["industry"],
+                        "cape": cape
+                    })
+                    
+                    insert_model_output()
 
                 except Exception as e:
                     f.write(f"  [WARN] {ticker} failed: {e}")
@@ -845,6 +895,7 @@ def run_user_pipeline(user_path):
             for _, row in portfolio_df.iterrows():
                 insert_portfolio_row(connection, END_DATE, row["Symbol"], row["Quantity"], row["Average Cost"],
                                         row["Industry"], row["Market Price (CAD)"], row["Weight"])
+                
 
             # ── Portfolio-level optimisation ─────────────────────────────────────────
             if len(returns_dict) >= 2:
@@ -854,6 +905,7 @@ def run_user_pipeline(user_path):
                 cov_matrix = build_covariance(returns_dict)
                 opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
                 print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe", file=f)
+                insert_recommendation(connection, END_DATE, ticker, "Max Sharpe", current_w, target, signal, )
                 print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility", file=f)
             else:
                 pprint.pprint(returns_dict)

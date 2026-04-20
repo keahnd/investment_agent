@@ -9,7 +9,7 @@ def init_database(user_path):
 				CREATE TABLE IF NOT EXISTS portfolios (
 					date			TEXT NOT NULL,
 					ticker 			TEXT NOT NULL,
-					shares			REAL,
+					quantity			REAL,
 					avg_cost		REAL,
 					asset_class 	TEXT,
 					current_price	REAL,
@@ -21,6 +21,7 @@ def init_database(user_path):
 				CREATE TABLE IF NOT EXISTS recommendations (
 					date                TEXT NOT NULL,
 					ticker              TEXT NOT NULL,
+					strategy			TEXT,
 					current_weight      REAL,
 					recommended_weight  REAL,
 					action              TEXT,
@@ -68,6 +69,8 @@ def init_database(user_path):
 					ma_50				REAL,
 					earnings_growth		REAL,
 					revenue_growth		REAL,
+					sector				TEXT,
+					industry			TEXT,
 					
 					cape                REAL,
 					PRIMARY KEY (date, ticker)
@@ -78,7 +81,7 @@ def init_database(user_path):
 					ticker          TEXT NOT NULL,
 					weight          REAL,
 					price           REAL,
-					shares          REAL,
+					quantity          REAL,
 					market_value    REAL,
 					total_value     REAL,
 					PRIMARY KEY (date, ticker)
@@ -87,14 +90,41 @@ def init_database(user_path):
     con.commit()
     return con
 
-def insert_portfolio_row(conn, date, ticker, shares, avg_cost, asset_class,
+def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
                         	current_price, market_value, weight):
     conn.execute("""
                 	INSERT INTO portfolios
-						(date, ticker, shares, avg_cost, asset_class,
+						(date, ticker, quantity, avg_cost, asset_class,
 						current_price, market_value, weight)
                    	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (date, ticker, shares, avg_cost, asset_class,
+                    """, (date, ticker, quantity, avg_cost, asset_class,
                           current_price, market_value, weight))
     
+    conn.commit()
+    
+def insert_model_output(conn, date, ticker, params: dict):
+    conn.execute("""
+			INSERT INTO model_outputs (date, ticker, alpha_daily, beta_mkt, beta_smb,
+				beta_hml, r_squared, alpha_pval, garch_omega, garch_alpha, garch_beta,
+				garch_persistence, garch_longrun_vol, garch_current_vol, mu_annual,
+				sigma_annual, mc_p05, mc_p25, mc_p50, mc_p75, mc_p95, mc_var95, mc_cvar95,
+				forward_pe, ttm_pe, peg_ratio, ev_ebitda, target_price,	analyst_rec, ma_200,
+				ma_50, earnings_growth, revenue_growth, sector, industry, cape)
+			VALUES (:date, :ticker, :alpha_daily, :beta_mkt, :beta_smb,
+				:beta_hml, :r_squared, :alpha_pval, :garch_omega, :garch_alpha, :garch_beta,
+				:garch_persistence, :garch_longrun_vol, :garch_current_vol, :mu_annual,
+				:sigma_annual, :mc_p05, :mc_p25, :mc_p50, :mc_p75, :mc_p95, :mc_var95, :mc_cvar95,
+				:forward_pe, :ttm_pe, :peg_ratio, :ev_ebitda, :target_price,	:analyst_rec, :ma_200,
+				:ma_50, :earnings_growth, :revenue_growth, :sector, :industry, :cape)
+		""", {"date": date, "ticker": ticker, **params})
+    conn.commit()
+    
+def insert_recommendation(conn, date, ticker, strategy, current_w,
+                           recommended_w, action, mu, sigma):
+    conn.execute("""
+        INSERT INTO recommendations
+            (date, ticker, strategy, current_weight, recommended_weight,
+             action, mu_annual, sigma_annual)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (date, ticker, strategy, current_w, recommended_w, action, mu, sigma))
     conn.commit()
