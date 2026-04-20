@@ -549,7 +549,7 @@ def build_covariance(returns_dict):
     return df.cov() * 252
 
 
-def run_optimisation(mu_dict, cov_matrix, rf_ann):
+def run_optimisation(portfolio_df, mu_dict, cov_matrix, strategy, rf_ann, file=None):
     """
     Runs Max Sharpe and Min Volatility portfolio optimisations.
 
@@ -570,11 +570,23 @@ def run_optimisation(mu_dict, cov_matrix, rf_ann):
     ef_minvol = EfficientFrontier(mu_series, cov_matrix)
     ef_minvol.min_volatility()
     weights_minvol = ef_minvol.clean_weights()
+    
+    weights = {
+        "Max Sharpe": weights_sharpe, 
+        "Min Volatility": weights_minvol
+    }
+    
+    get_signal(portfolio_df=portfolio_df, opt_weights=weights)
 
-    return {"max_sharpe": weights_sharpe, "min_vol": weights_minvol}
+    for i, (name, weights) in enumerate(weights):
+        print(f"\n--- {name} Rebalancing ---", file=file)
+        print(f"{'Ticker':<8} {'Current':>10} {'Target':>10} {'Delta':>10} {'Signal':>8}", file=file)
+        print(f"{portfolio_df["Symbol"]:<8} {portfolio_df["Weight"]:>10.1%} {portfolio_df[f"{name}_Target"]:>10.1%} {portfolio_df[f"{name}_Delta"]:>+10.1%} {portfolio_df[f"{name}_Signal"]:>8}", file=file)
+
+    return weights
 
 
-def print_recommendation(portfolio_df, opt_weights, scenario_name, file=None):
+def get_signal(portfolio_df, opt_weights):
     """
     Compares optimised weights to current holdings and prints BUY/SELL/HOLD signals.
 
@@ -584,21 +596,12 @@ def print_recommendation(portfolio_df, opt_weights, scenario_name, file=None):
         scenario_name: Label string e.g. 'Max Sharpe'
         file: File object to write to (defaults to stdout)
     """
-    current = dict(zip(portfolio_df['Symbol'], portfolio_df['Weight']))
     threshold = 0.02
 
-    print(f"\n--- {scenario_name} Rebalancing ---", file=file)
-    print(f"{'Ticker':<8} {'Current':>10} {'Target':>10} {'Delta':>10} {'Signal':>8}", file=file)
-    for ticker, target in opt_weights.items():
-        current_w = current.get(ticker, 0.0)
-        delta = target - current_w
-        if delta > threshold:
-            signal = "BUY"
-        elif delta < -threshold:
-            signal = "SELL"
-        else:
-            signal = "HOLD"
-        print(f"{ticker:<8} {current_w:>10.1%} {target:>10.1%} {delta:>+10.1%} {signal:>8}", file=file)
+    for name, weights in opt_weights.items():
+        portfolio_df[f"{name}_Target"] = weights
+        portfolio_df[f"{name}_Delta"] = portfolio_df["Weight"] - portfolio_df[f"{name}_Target"]
+        portfolio_df[f"{name}_Signal"] = "BUY" if portfolio_df["Delta"] > threshold else "SELL" if portfolio_df["Delta"] < -threshold else "HOLD"
 
 
 def compute_confidence_score(n_obs, r_squared, garch_persist):
@@ -899,20 +902,6 @@ def run_user_pipeline(user_path):
             f.write(f"\n{'='*60}")
             f.write(f"  {name} - {today}")
             f.write(f"{'='*60}")
-            # ── Portfolio-level optimisation ─────────────────────────────────────────
-            if len(returns_dict) >= 2:
-                f.write(f"\n{'='*60}")
-                f.write("  Portfolio Optimisation")
-                f.write(f"{'='*60}")
-                cov_matrix = build_covariance(returns_dict)
-                opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
-                print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe", file=f)
-                # insert_recommendation(connection, today, ticker, "Max Sharpe", current_w, target, signal, )
-                print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility", file=f)
-            else:
-                pprint.pprint(returns_dict)
-                print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
-
             # ── Per-ticker summary table ──────────────────────────────────────────────
             if results:
                 df_results = pd.DataFrame(results)
@@ -920,6 +909,16 @@ def run_user_pipeline(user_path):
                 df_results[float_cols] = df_results[float_cols].round(2)
                 f.write('\n')
                 f.write(df_results.to_string(index=False))
+            # ── Portfolio-level optimisation ─────────────────────────────────────────
+            if len(returns_dict) >= 2:
+                f.write(f"\n{'='*60}")
+                f.write("  Portfolio Optimisation")
+                f.write(f"{'='*60}")
+                cov_matrix = build_covariance(returns_dict)
+                opt_weights = run_optimisation(portfolio_df, mu_dict, cov_matrix, rf_ann, f)
+            else:
+                pprint.pprint(returns_dict)
+                print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
     finally:
         connection.close()
 
