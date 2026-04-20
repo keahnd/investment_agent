@@ -21,7 +21,7 @@ import yfinance as yf
 import requests, zipfile, io
 from datetime import datetime, timedelta, date
 from pypfopt import EfficientFrontier
-from scipy.optimize import minimize
+from arch import arch_model
 import time
 import os
 import sys
@@ -347,25 +347,9 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, file=None):
     }
 
 
-def garch_neg_log_likelihood(params, returns):
-    omega, alpha, beta = params
-    if omega <= 0 or alpha < 0 or beta < 0 or alpha + beta >= 1:
-        return 1e10
-    n = len(returns)
-    h = np.zeros(n)
-    h[0] = np.var(returns)
-    ll = 0.0
-    for t in range(1, n):
-        h[t] = omega + alpha * returns[t - 1] ** 2 + beta * h[t - 1]
-        if h[t] <= 0:
-            return 1e10
-        ll += 0.5 * (np.log(2 * np.pi) + np.log(h[t]) + returns[t] ** 2 / h[t])
-    return ll
-
-
 def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
     """
-    Fits GARCH(1,1) to OLS residuals and computes total asset volatility.
+    Fits GARCH(1,1) to OLS residuals using the arch library.
 
     Args:
         residuals: Regression residual array
@@ -374,36 +358,31 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
 
     Returns:
         dict with h_garch, sigma_t, sigma_total_annual, garch_persist,
-              garch_long_run_vol
+              garch_long_run_vol, pvalues
     """
-    T_hist = len(residuals)
-    x0 = [1e-6, 0.08, 0.90]
-    bounds = [(1e-9, 0.01), (1e-4, 0.49), (1e-4, 0.99)]
-    result = minimize(
-        garch_neg_log_likelihood, x0, args=(residuals,),
-        method='L-BFGS-B', bounds=bounds
-    )
+    model = arch_model(residuals * 100, vol='Garch', p=1, q=1, dist='normal', rescale=False)
+    res = model.fit(disp='off')
 
-    omega_g, alpha_g_est, beta_g_est = result.x
+    omega_g = res.params['omega'] / 1e4
+    alpha_g_est = res.params['alpha[1]']
+    beta_g_est = res.params['beta[1]']
     garch_persist = alpha_g_est + beta_g_est
     garch_long_run_vol = np.sqrt(omega_g / (1 - garch_persist)) * np.sqrt(252)
 
-    h_garch = np.zeros(T_hist)
-    h_garch[0] = np.var(residuals)
-    for t in range(1, T_hist):
-        h_garch[t] = omega_g + alpha_g_est * residuals[t - 1] ** 2 + beta_g_est * h_garch[t - 1]
-
+    h_garch = (res.conditional_volatility / 100) ** 2
     sigma_t = np.sqrt(h_garch)
-    sigma_current_daily = np.sqrt(h_garch[-1])
+    sigma_current_daily = sigma_t[-1]
     sigma_total_annual = np.sqrt(
         (b_MKT ** 2 * factor_vols[0] ** 2 + b_SMB ** 2 * factor_vols[1] ** 2 + b_HML ** 2 * factor_vols[2] ** 2) * 252
         + h_garch[-1] * 252
     )
 
+    pvalues = res.pvalues
+
     print("\n[GARCH(1,1) on Idiosyncratic Residuals]", file=file)
-    print(f"  omega               : {omega_g:.2e}", file=file)
-    print(f"  alpha (ARCH)        : {alpha_g_est:.4f}", file=file)
-    print(f"  beta  (GARCH)       : {beta_g_est:.4f}", file=file)
+    print(f"  omega               : {omega_g:.2e}  (p={pvalues['omega']:.3f})", file=file)
+    print(f"  alpha (ARCH)        : {alpha_g_est:.4f}  (p={pvalues['alpha[1]']:.3f})", file=file)
+    print(f"  beta  (GARCH)       : {beta_g_est:.4f}  (p={pvalues['beta[1]']:.3f})", file=file)
     print(f"  Persistence (α+β)   : {garch_persist:.4f}", file=file)
     print(f"  Long-run vol (ann.) : {garch_long_run_vol:.2%}", file=file)
     print(f"  Current cond. vol   : {sigma_current_daily * np.sqrt(252):.2%} (annualised idiosyncratic)", file=file)
@@ -415,6 +394,7 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
         "sigma_total_annual": sigma_total_annual,
         "garch_persist": garch_persist,
         "garch_long_run_vol": garch_long_run_vol,
+        "pvalues": pvalues,
     }
 
 
