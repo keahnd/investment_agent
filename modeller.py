@@ -10,6 +10,7 @@ Steps:
   6. Portfolio optimisation (Max Sharpe + Min Vol) -> rebalancing signals
 """
 
+import re
 import numpy as np
 import pprint
 import pandas as pd
@@ -19,6 +20,7 @@ import matplotlib.gridspec as gridspec
 from matplotlib.lines import Line2D
 import yfinance as yf
 import requests, zipfile, io
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, date
 from pypfopt import EfficientFrontier
 from arch import arch_model
@@ -55,6 +57,7 @@ CACHE_FILE = "prices_cache.parquet"
 FF_CACHE_FILE = "ff_factors_cache.parquet"
 VAL_CACHE_FILE = "valuation_cache.json"
 USERS_DIR = Path("users")
+INFLATION_RATE = 0.025
 
 
 def discover_users() -> list[Path]:
@@ -275,7 +278,7 @@ def compute_returns(raw, ticker, ff_factors, file=None):
     }
 
 
-def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, file=None):
+def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, cape, file=None):
     """
     Runs 3-factor OLS regression on excess returns.
 
@@ -326,10 +329,16 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, file=None):
         SMB.mean() * 252,
         HML.mean() * 252,
     ])
+    
+    historical_erp = factor_annual_means[0]
+    cape_weight = 0.6           # TUNABLE PARAM
+    cape_erp = max(0.0, (1 / cape) - (rf_ann - INFLATION_RATE))        # HARCODED INFLATION
+    blended_erp = cape_weight * cape_erp + (1 - cape_weight) * historical_erp
+    
     mu_annual = (
         rf_ann
         + alpha_daily * 252
-        + b_MKT * factor_annual_means[0]
+        + b_MKT * blended_erp
         + b_SMB * factor_annual_means[1]
         + b_HML * factor_annual_means[2]
     )
@@ -612,6 +621,42 @@ def print_recommendation(portfolio_df, opt_weights, conn, today, mu_dict, sigma_
                 mu           = mu_dict.get(ticker),
                 sigma        = sigma_dict.get(ticker),
             )
+            
+def fetch_cape():
+    """
+    Fetch the current Shiller CAPE ratio from multpl.com
+    
+    CAPE > 30 indicates market is overvalued
+    CAPE < 20 indicates market is undervalued
+    
+    If request fails fall back to 25 (neutral market)
+    """
+    url = "https://www.multpl.com/shiller-pe"
+    
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, "html.parser")
+        element = soup.find(id="current")
+        
+        raw_text = element.text.strip()
+        match = re.search(r"\d+\.\d+", raw_text)
+        if not match:
+            raise ValueError(f"No float found in CAPE element: {raw_text!r}")
+        cape = float(match.group())
+        if not (10 < cape < 60):
+            raise ValueError(f"CAPE value {cape} outside plausible range")
+        
+        return cape
+    
+    except Exception as e:
+        print(f"  [CAPE] Failed to fetch: {e}. Using fallback value of 25.0")
+        return 25.0    
     
 
 def compute_confidence_score(n_obs, r_squared, garch_persist):
@@ -781,7 +826,7 @@ def plot_outputs(ticker, ret, fm, g, mc, user_path):
     print(f"\n[Done]  Plot saved to {path}")     
 
 
-def run_user_pipeline(user_path):
+def run_user_pipeline(user_path, cape):
     """
     Core Pipeline for a single User.
     """
@@ -824,7 +869,7 @@ def run_user_pipeline(user_path):
                 f.write(f"{'='*60}")
                 try:
                     ret = compute_returns(raw_prices, ticker, ff_factors, file=f)
-                    fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], file=f)
+                    fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], cape, file=f)
                     g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=f)
                     mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]), file=f)
                     val = fetch_valuation_metrics(ticker, True)
@@ -888,7 +933,7 @@ def run_user_pipeline(user_path):
                         "revenue_growth": val["revenue_growth"],
                         "sector": val["sector"],
                         "industry": val["industry"],
-                        # "cape": cape
+                        "cape": cape
                     })
                     
                     insert_model_output(connection, today, ticker, list(db_results.values())[-1])
@@ -913,6 +958,7 @@ def run_user_pipeline(user_path):
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"\n{'='*60}")
             f.write(f"  {name} - {today}")
+            f.write(f"  Current CAPE: {cape:.2f}")
             f.write(f"{'='*60}")
             # ── Per-ticker summary table ──────────────────────────────────────────────
             if results:
@@ -940,9 +986,11 @@ def main():
     users = discover_users()
     results = {"success": [], "failed": []}
     
+    cape = fetch_cape()
+    
     for user_path in users:
         try:
-            run_user_pipeline(user_path)
+            run_user_pipeline(user_path, cape)
             results["success"].append(user_path.name)
         except Exception as e:
             print(f"\n  ✗ FAILED for {user_path.name}: {e}")
