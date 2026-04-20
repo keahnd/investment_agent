@@ -9,7 +9,7 @@ def init_database(user_path):
 				CREATE TABLE IF NOT EXISTS portfolios (
 					date			TEXT NOT NULL,
 					ticker 			TEXT NOT NULL,
-					quantity			REAL,
+					quantity		REAL,
 					avg_cost		REAL,
 					asset_class 	TEXT,
 					current_price	REAL,
@@ -92,8 +92,9 @@ def init_database(user_path):
 
 def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
                         	current_price, market_value, weight):
+    # OR REPLACE IS FOR TESTING
     conn.execute("""
-                	INSERT INTO portfolios
+                	INSERT OR REPLACE INTO portfolios						
 						(date, ticker, quantity, avg_cost, asset_class,
 						current_price, market_value, weight)
                    	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -103,8 +104,9 @@ def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
     conn.commit()
     
 def insert_model_output(conn, date, ticker, params: dict):
+    # OR REPLACE IS FOR TESTING
     conn.execute("""
-			INSERT INTO model_outputs (date, ticker, alpha_daily, beta_mkt, beta_smb,
+			INSERT OR REPLACE INTO model_outputs (date, ticker, alpha_daily, beta_mkt, beta_smb,
 				beta_hml, r_squared, alpha_pval, garch_omega, garch_alpha, garch_beta,
 				garch_persistence, garch_longrun_vol, garch_current_vol, mu_annual,
 				sigma_annual, mc_p05, mc_p25, mc_p50, mc_p75, mc_p95, mc_var95, mc_cvar95,
@@ -121,8 +123,9 @@ def insert_model_output(conn, date, ticker, params: dict):
     
 def insert_recommendation(conn, date, ticker, strategy, current_w,
                            recommended_w, action, mu, sigma):
+    # OR REPLACE IS FOR TESTING
     conn.execute("""
-        INSERT INTO recommendations
+        INSERT OR REPLACE INTO recommendations
             (date, ticker, strategy, current_weight, recommended_weight,
              action, mu_annual, sigma_annual)
         VALUES (?, ?, ?, ?, ?, ?, ?)
