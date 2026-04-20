@@ -21,13 +21,13 @@ def init_database(user_path):
 				CREATE TABLE IF NOT EXISTS recommendations (
 					date                TEXT NOT NULL,
 					ticker              TEXT NOT NULL,
-					strategy			TEXT,
+					strategy			TEXT NOT NULL,
 					current_weight      REAL,
 					recommended_weight  REAL,
 					action              TEXT,
 					mu_annual           REAL,
 					sigma_annual        REAL,
-					PRIMARY KEY (date, ticker)
+					PRIMARY KEY (date, ticker, strategy)
 				)""")
     cursor.execute("""
 				CREATE TABLE IF NOT EXISTS model_outputs (
@@ -128,6 +128,6 @@ def insert_recommendation(conn, date, ticker, strategy, current_w,
         INSERT OR REPLACE INTO recommendations
             (date, ticker, strategy, current_weight, recommended_weight,
              action, mu_annual, sigma_annual)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (date, ticker, strategy, current_w, recommended_w, action, mu, sigma))
     conn.commit()

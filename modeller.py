@@ -29,7 +29,7 @@ import json
 import traceback
 from pathlib import Path
 from curl_cffi import requests
-from database.db import init_database, insert_portfolio_row
+from database.db import init_database, insert_portfolio_row, insert_model_output, insert_recommendation
 
 
 class _Tee:
@@ -549,7 +549,7 @@ def build_covariance(returns_dict):
     return df.cov() * 252
 
 
-def run_optimisation(portfolio_df, mu_dict, cov_matrix, strategy, rf_ann, file=None):
+def run_optimisation(mu_dict, cov_matrix, rf_ann):
     """
     Runs Max Sharpe and Min Volatility portfolio optimisations.
 
@@ -576,17 +576,11 @@ def run_optimisation(portfolio_df, mu_dict, cov_matrix, strategy, rf_ann, file=N
         "Min Volatility": weights_minvol
     }
     
-    get_signal(portfolio_df=portfolio_df, opt_weights=weights)
-
-    for i, (name, weights) in enumerate(weights):
-        print(f"\n--- {name} Rebalancing ---", file=file)
-        print(f"{'Ticker':<8} {'Current':>10} {'Target':>10} {'Delta':>10} {'Signal':>8}", file=file)
-        print(f"{portfolio_df["Symbol"]:<8} {portfolio_df["Weight"]:>10.1%} {portfolio_df[f"{name}_Target"]:>10.1%} {portfolio_df[f"{name}_Delta"]:>+10.1%} {portfolio_df[f"{name}_Signal"]:>8}", file=file)
-
+    # get_signal(portfolio_df=portfolio_df, opt_weights=weights)        
     return weights
 
 
-def get_signal(portfolio_df, opt_weights):
+def print_recommendation(portfolio_df, opt_weights, conn, today, mu_dict, sigma_dict, file=None):
     """
     Compares optimised weights to current holdings and prints BUY/SELL/HOLD signals.
 
@@ -598,11 +592,27 @@ def get_signal(portfolio_df, opt_weights):
     """
     threshold = 0.02
 
-    for name, weights in opt_weights.items():
-        portfolio_df[f"{name}_Target"] = weights
-        portfolio_df[f"{name}_Delta"] = portfolio_df["Weight"] - portfolio_df[f"{name}_Target"]
-        portfolio_df[f"{name}_Signal"] = "BUY" if portfolio_df["Delta"] > threshold else "SELL" if portfolio_df["Delta"] < -threshold else "HOLD"
-
+    for strategy, weights in opt_weights.items():
+        portfolio_df[f"{strategy}_Target"] = portfolio_df["Symbol"].map(weights)
+        portfolio_df[f"{strategy}_Delta"] = portfolio_df[f"{strategy}_Target"] - portfolio_df["Weight"]
+        portfolio_df[f"{strategy}_Signal"] = portfolio_df[f"{strategy}_Delta"].apply(
+            lambda d: "BUY" if d > threshold else "SELL" if d < -threshold else "HOLD"
+        )
+        
+        print(f"\n--- {strategy} Rebalancing ---", file=file)
+        print(f"{'Ticker':<8} {'Current':>10} {'Target':>10} {'Delta':>10} {'Signal':>8}", file=file)
+        for _, row in portfolio_df.iterrows():
+            ticker = row["Symbol"]
+            print(f"{row['Symbol']:<8} {row['Weight']:>10.1%} {row[f'{strategy}_Target']:>10.1%} {row[f'{strategy}_Delta']:>+10.1%} {row[f'{strategy}_Signal']:>8}", file=file)
+            insert_recommendation(
+                conn, today, ticker, strategy,
+                current_w    = row["Weight"],
+                recommended_w = weights.get(ticker, 0.0),
+                action       = row[f"{strategy}_Signal"],
+                mu           = mu_dict.get(ticker),
+                sigma        = sigma_dict.get(ticker),
+            )
+    
 
 def compute_confidence_score(n_obs, r_squared, garch_persist):
     history_score = min(1.0, max(0.0, (n_obs - 252) / (1260 - 252)))
@@ -804,6 +814,7 @@ def run_user_pipeline(user_path):
         db_results = []
         returns_dict = {}   # {ticker: log_ret} for covariance matrix
         mu_dict = {}        # {ticker: mu_annual} for optimisation
+        sigma_dict = {}     # {ticker: sigma_annual} for optimisation
                     
         for ticker in all_tickers:
             asset_analysis_output = asset_analysis / f"{ticker}_analysis.txt"
@@ -823,6 +834,7 @@ def run_user_pipeline(user_path):
 
                     returns_dict[ticker] = ret["log_ret_series"]
                     mu_dict[ticker] = fm["mu_annual"]
+                    sigma_dict[ticker] = g["sigma_total_annual"]
                     portfolio_df.loc[portfolio_df['Symbol'] == ticker, 'Industry'] = val.get('industry')
 
                     results.append({
@@ -879,7 +891,7 @@ def run_user_pipeline(user_path):
                         # "cape": cape
                     })
                     
-                    # insert_model_output()
+                    insert_model_output(connection, today, ticker, list(db_results.values())[-1])
 
                 except Exception as e:
                     f.write(f"  [WARN] {ticker} failed: {e}")
@@ -915,7 +927,8 @@ def run_user_pipeline(user_path):
                 f.write("  Portfolio Optimisation")
                 f.write(f"{'='*60}")
                 cov_matrix = build_covariance(returns_dict)
-                opt_weights = run_optimisation(portfolio_df, mu_dict, cov_matrix, rf_ann, f)
+                opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
+                print_recommendation(portfolio_df, opt_weights, connection, today, mu_dict, sigma_dict, f)
             else:
                 pprint.pprint(returns_dict)
                 print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
