@@ -13,7 +13,7 @@ def init_database(user_path):
 					avg_cost		REAL,
 					asset_class 	TEXT,
 					current_price	REAL,
-					market_value 	REAL
+					market_value 	REAL,
 					weight 			REAL,
 					PRIMARY KEY (date, ticker)
 				)""")
@@ -64,8 +64,8 @@ def init_database(user_path):
 					ev_ebitda           REAL,
      				target_price		REAL
 					analyst_rec			TEXT,
-					200MA				REAL,
-					50MA				REAL,
+					ma_200				REAL,
+					ma_50				REAL,
 					earnings_growth		REAL,
 					revenue_growth		REAL,
 					
@@ -86,3 +86,15 @@ def init_database(user_path):
     
     con.commit()
     return con
+
+def insert_portfolio_row(conn, date, ticker, shares, avg_cost, asset_class,
+                        	current_price, market_value, weight):
+    conn.execute("""
+                	INSERT INTO portfolios
+						(date, ticker, shares, avg_cost, asset_class,
+						current_price, market_value, weight)
+                   	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (date, ticker, shares, avg_cost, asset_class,
+                          current_price, market_value, weight))
+    
+    conn.commit()

@@ -29,6 +29,7 @@ import json
 import traceback
 from pathlib import Path
 from curl_cffi import requests
+from database.db import init_database, insert_portfolio_row
 
 
 class _Tee:
@@ -102,7 +103,7 @@ def _download_with_retry(tickers, start, end):
             data = yf.download(
                 tickers, start=start, end=end,
                 auto_adjust=True, progress=False, threads=False, session=session
-            )['Close'].dropna()
+            )['Close']
             if data.empty:
                 raise ValueError("Download returned empty DataFrame (likely rate limited).")
             return data
@@ -596,7 +597,7 @@ def print_recommendation(portfolio_df, opt_weights, scenario_name, file=None):
         scenario_name: Label string e.g. 'Max Sharpe'
         file: File object to write to (defaults to stdout)
     """
-    current = dict(zip(portfolio_df['ticker'], portfolio_df['weight']))
+    current = dict(zip(portfolio_df['Symbol'], portfolio_df['weight']))
     threshold = 0.02
 
     print(f"\n--- {scenario_name} Rebalancing ---", file=file)
@@ -784,90 +785,95 @@ def run_user_pipeline(user_path):
     """
     Core Pipeline for a single User.
     """
-    config = load_config(user_path)
-    name = config["name"]    
-    portfolio_df = load_portfolio(user_path)
-    tickers = portfolio_df['ticker'].tolist()
-    extra = config.get("extra_tickers", [])
-    all_tickers = list(set(tickers + extra)) 
+    connection = init_database(user_path)
     
-    today = date.today().isoformat()
-    report_dir = user_path / "reports" / f"{today}"
-    report_dir.mkdir(exist_ok=True)
-    output_path = report_dir / f"recommendation_{today}.txt"   
+    try:
+        config = load_config(user_path)
+        name = config["name"]    
+        portfolio_df = load_portfolio(user_path)
+        portfolio_df.loc[portfolio_df['Exchange'] == 'TSX', 'Symbol'] += '.TO'
+        print(repr(portfolio_df['Symbol'].iloc[0]))
 
-    raw_prices = fetch_prices(all_tickers)
-    ff_factors = fetch_ff_factors()
-    rf_ann = float(ff_factors['RF'].mean() * 252)
+        tickers = portfolio_df['Symbol'].tolist()
+        extra = config.get("extra_tickers", [])
+        all_tickers = list(set(tickers + extra)) 
+        
+        today = date.today().isoformat()
+        report_dir = user_path / "reports" / f"{today}"
+        report_dir.mkdir(exist_ok=True)
+        output_path = report_dir / f"recommendation_{today}.txt"   
 
-    results = []
-    returns_dict = {}   # {ticker: log_ret} for covariance matrix
-    mu_dict = {}        # {ticker: mu_annual} for optimisation
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(f"\n{'='*60}")
-        f.write(f"  {name} - {today}")
-        f.write(f"{'='*60}")
-        for ticker in all_tickers:
+        raw_prices = fetch_prices(all_tickers)
+        ff_factors = fetch_ff_factors()
+        rf_ann = float(ff_factors['RF'].mean() * 252)
+
+        results = []
+        returns_dict = {}   # {ticker: log_ret} for covariance matrix
+        mu_dict = {}        # {ticker: mu_annual} for optimisation
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"\n{'='*60}")
-            f.write(f"  {ticker}")
+            f.write(f"  {name} - {today}")
             f.write(f"{'='*60}")
-            try:
-                ret = compute_returns(raw_prices, ticker, ff_factors, file=f)
-                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], file=f)
-                g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=f)
-                mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]), file=f)
-                val = fetch_valuation_metrics(ticker)
-                score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
+            for ticker in all_tickers:
+                f.write(f"\n{'='*60}")
+                f.write(f"  {ticker}")
+                f.write(f"{'='*60}")
+                try:
+                    ret = compute_returns(raw_prices, ticker, ff_factors, file=f)
+                    fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], file=f)
+                    g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=f)
+                    mc = run_monte_carlo(fm["mu_annual"], g["sigma_total_annual"], float(raw_prices[ticker].iloc[-1]), file=f)
+                    val = fetch_valuation_metrics(ticker)
+                    score, conf = compute_confidence_score(ret["T_hist"], fm["r_squared"], g["garch_persist"])
 
-                plot_outputs(ticker, ret, fm, g, mc, report_dir)
+                    plot_outputs(ticker, ret, fm, g, mc, report_dir)
 
-                returns_dict[ticker] = ret["log_ret_series"]
-                mu_dict[ticker] = fm["mu_annual"]
+                    returns_dict[ticker] = ret["log_ret_series"]
+                    mu_dict[ticker] = fm["mu_annual"]
 
-                results.append({
-                    "ticker": ticker,
-                    "mu_annual": fm["mu_annual"],
-                    "sigma_annual": g["sigma_total_annual"],
-                    "VaR_95": mc["VaR_95"],
-                    "CVaR_95": mc["CVaR_95"],
-                    "E_ST": mc["E_ST"],
-                    "prob_up": mc["prob_up"],
-                    "confidence": conf,
-                    "confidence_score": score,
-                    **val,
-                })
+                    results.append({
+                        "ticker": ticker,
+                        "mu_annual": fm["mu_annual"],
+                        "sigma_annual": g["sigma_total_annual"],
+                        "VaR_95": mc["VaR_95"],
+                        "CVaR_95": mc["CVaR_95"],
+                        "E_ST": mc["E_ST"],
+                        "prob_up": mc["prob_up"],
+                        "confidence": conf,
+                        "confidence_score": score,
+                        **val,
+                    })
 
-            except Exception as e:
-                f.write(f"  [WARN] {ticker} failed: {e}")
+                except Exception as e:
+                    f.write(f"  [WARN] {ticker} failed: {e}")
 
-        # ── Compute current market weights from shares × latest price ────────────
-        last_prices = raw_prices[tickers].iloc[-1]
-        portfolio_df['price'] = portfolio_df['ticker'].map(last_prices)
-        portfolio_df['market_value'] = portfolio_df['shares'] * portfolio_df['price']
-        total_value = portfolio_df['market_value'].sum()
-        portfolio_df['weight'] = portfolio_df['market_value'] / total_value
+            # ── Compute current market weights from shares × latest price ────────────
+            total_value = portfolio_df['Book Value (CAD)'].sum()
+            portfolio_df['weight'] = portfolio_df['Book Value (CAD)'] / total_value
 
-        # ── Portfolio-level optimisation ─────────────────────────────────────────
-        if len(returns_dict) >= 2:
-            f.write(f"\n{'='*60}")
-            f.write("  Portfolio Optimisation")
-            f.write(f"{'='*60}")
-            cov_matrix = build_covariance(returns_dict)
-            opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
-            print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe", file=f)
-            print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility", file=f)
-        else:
-            pprint.pprint(returns_dict)
-            print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
+            # ── Portfolio-level optimisation ─────────────────────────────────────────
+            if len(returns_dict) >= 2:
+                f.write(f"\n{'='*60}")
+                f.write("  Portfolio Optimisation")
+                f.write(f"{'='*60}")
+                cov_matrix = build_covariance(returns_dict)
+                opt_weights = run_optimisation(mu_dict, cov_matrix, rf_ann)
+                print_recommendation(portfolio_df, opt_weights["max_sharpe"], "Max Sharpe", file=f)
+                print_recommendation(portfolio_df, opt_weights["min_vol"], "Min Volatility", file=f)
+            else:
+                pprint.pprint(returns_dict)
+                print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
 
-        # ── Per-ticker summary table ──────────────────────────────────────────────
-        if results:
-            df_results = pd.DataFrame(results)
-            float_cols = df_results.select_dtypes(include='float').columns
-            df_results[float_cols] = df_results[float_cols].round(2)
-            f.write('\n')
-            f.write(df_results.to_string(index=False))
+            # ── Per-ticker summary table ──────────────────────────────────────────────
+            if results:
+                df_results = pd.DataFrame(results)
+                float_cols = df_results.select_dtypes(include='float').columns
+                df_results[float_cols] = df_results[float_cols].round(2)
+                f.write('\n')
+                f.write(df_results.to_string(index=False))
+    finally:
+        connection.close()
 
 
 def main():
