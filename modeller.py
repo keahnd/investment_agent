@@ -533,6 +533,8 @@ def fetch_valuation_metrics(ticker, force_refresh=False):
                 '50MA': info.get('fiftyDayAverage'),
                 'earnings_growth': info.get('earningsGrowth'),
                 'revenue_growth': info.get('revenueGrowth'),
+                'sector': info.get('sector'),
+                'industry': info.get('industry')
             }
             cache[ticker] = {'date': today, 'metrics': metrics}
             with open(VAL_CACHE_FILE, 'w', encoding='utf-8') as f:
@@ -791,6 +793,8 @@ def run_user_pipeline(user_path):
         config = load_config(user_path)
         name = config["name"]    
         portfolio_df = load_portfolio(user_path)
+        usd_cad = yf.Ticker("USDCAD=X").fast_info['lastPrice']
+        
         portfolio_df.loc[portfolio_df['Exchange'] == 'TSX', 'Symbol'] += '.TO'
         print(repr(portfolio_df['Symbol'].iloc[0]))
 
@@ -831,6 +835,7 @@ def run_user_pipeline(user_path):
 
                     returns_dict[ticker] = ret["log_ret_series"]
                     mu_dict[ticker] = fm["mu_annual"]
+                    portfolio_df.loc[portfolio_df['Symbol'] == ticker, 'Industry'] = val.get('industry')
 
                     results.append({
                         "ticker": ticker,
@@ -850,7 +855,16 @@ def run_user_pipeline(user_path):
 
             # ── Compute current market weights from shares × latest price ────────────
             total_value = portfolio_df['Book Value (CAD)'].sum()
-            portfolio_df['weight'] = portfolio_df['Book Value (CAD)'] / total_value
+            portfolio_df['Weight'] = portfolio_df['Book Value (CAD)'] / total_value
+            portfolio_df['Average Cost'] = portfolio_df['Book Value (CAD)'] / portfolio_df['Quantity']
+            portfolio_df['Market Price (CAD)'] = portfolio_df.apply(
+                lambda r: r['Market Price'] / usd_cad if r['Market Price Currency'] == 'USD' else r['Market Price'], axis=1
+            )
+
+            # ── Write Ticker Items to Database ───────────────────────────────────────
+            for _, row in portfolio_df.iterrows():
+                insert_portfolio_row(connection, END_DATE, row["Symbol"], row["Quantity"], row["Average Cost"],
+                                        row["Industry"], row["Market Price (CAD)"], row["Weight"])
 
             # ── Portfolio-level optimisation ─────────────────────────────────────────
             if len(returns_dict) >= 2:
