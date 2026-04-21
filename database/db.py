@@ -79,12 +79,13 @@ def init_database(user_path):
 				CREATE TABLE IF NOT EXISTS virtual_portfolio (
 					date            TEXT NOT NULL,
 					ticker          TEXT NOT NULL,
+					strategy		TEXT NOT NULL,
 					weight          REAL,
 					price           REAL,
-					quantity          REAL,
+					quantity        REAL,
 					market_value    REAL,
 					total_value     REAL,
-					PRIMARY KEY (date, ticker)
+					PRIMARY KEY (date, ticker, strategy)
 				)""")
     
     con.commit()

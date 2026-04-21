@@ -33,21 +33,6 @@ from pathlib import Path
 from curl_cffi import requests
 from database.db import init_database, insert_portfolio_row, insert_model_output, insert_recommendation
 
-
-class _Tee:
-    """Writes to both the real stdout and a report file simultaneously."""
-    def __init__(self, file_obj):
-        self._file = file_obj
-        self._stdout = sys.__stdout__
-
-    def write(self, data):
-        self._stdout.write(data)
-        self._file.write(data)
-
-    def flush(self):
-        self._stdout.flush()
-        self._file.flush()
-
 np.random.seed(42)
 
 END_DATE = datetime.today()
@@ -99,6 +84,17 @@ def load_config(user_path):
 
 
 def _download_with_retry(tickers, start, end):
+    """
+    Downloads prices for all tickers from start to end dates
+    
+    Args:
+        tickers: List of tickers to download
+        start: Beginning date for price range
+        end: End date for price range
+        
+    Returns:
+        dataframe of prices for tickers across the dates
+    """
     for attempt in range(5):
         wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
         try:
@@ -638,6 +634,9 @@ def fetch_cape():
     CAPE < 20 indicates market is undervalued
     
     If request fails fall back to 25 (neutral market)
+    
+    Returns:
+        float: CAPE Shiller value
     """
     url = "https://www.multpl.com/shiller-pe"
     
@@ -668,6 +667,21 @@ def fetch_cape():
     
 
 def compute_confidence_score(n_obs, r_squared, garch_persist):
+    """
+    Computes a confidence score for the analysis of each ticker.
+    
+    More information (eg. trading days) contributes to depper analysis
+    and a higher confidence score
+    
+    Args:
+        n_obs: Number of trading days of prices obtained
+        r_squared: How closely the stocks return is determined by fama-frech factors
+        garch_persist: How long volatility shocks last.
+        
+    Returns:
+        float: confidence score of analysis
+        string: confidence of analysis (high, low, med)
+    """
     history_score = min(1.0, max(0.0, (n_obs - 252) / (1260 - 252)))
     r2_score = min(1.0, max(0.0, r_squared))
     garch_score = 1.0 - max(0.0, (garch_persist - 0.90) / 0.09)
@@ -682,6 +696,20 @@ def compute_confidence_score(n_obs, r_squared, garch_persist):
 
     return score, confidence
 
+def reconcile_virtual_portfolio(conn):
+    """
+    Tracks a virtual portfolio based on recommendations from last week
+    
+    Uses last runs recommendations and executes trades at open of next day.
+    
+    Args:
+        conn: Connection to database
+        
+    Returns:
+    
+    """
+    
+    
 
 def plot_outputs(ticker, ret, fm, g, mc, user_path):
     """
@@ -889,8 +917,14 @@ def run_user_pipeline(user_path, cape):
     connection = init_database(user_path)
     
     try:
+        # ── Load User Config ─────────────────────────────────────────────────────
         config = load_config(user_path)
-        user_name = config["name"]    
+        user_name = config["name"]  
+        
+        # ── Run Reconciler - Virtual Portfolio ───────────────────────────────────
+        reconcile_virtual_portfolio(connection)
+        
+        # ── Load User Current Portfolio ──────────────────────────────────────────
         portfolio_df = load_portfolio(user_path)
         usd_cad = yf.Ticker("USDCAD=X").fast_info['lastPrice']
         
@@ -899,6 +933,7 @@ def run_user_pipeline(user_path, cape):
         extra = config.get("extra_tickers", [])
         all_tickers = list(set(tickers + extra)) 
         
+        # ── Construct Report Directory ──────────────────────────────────────────
         today = date.today().isoformat()
         
         report_dir = user_path / "reports" / f"{today}"
@@ -906,11 +941,12 @@ def run_user_pipeline(user_path, cape):
         output_path = report_dir / f"recommendation_{today}.txt"
         asset_analysis =  report_dir / "asset_analysis"
         asset_analysis.mkdir(exist_ok=True)
-
+        
+        # ── Per Ticker Analysis ─────────────────────────────────────────────────
         raw_prices = fetch_prices(all_tickers)
         ff_factors = fetch_ff_factors()
         rf_ann = float(ff_factors['RF'].mean() * 252)
-
+        
         results = []
         db_results = []
         returns_dict = {}   # {ticker: log_ret} for covariance matrix
@@ -1011,7 +1047,8 @@ def run_user_pipeline(user_path, cape):
         for _, row in portfolio_df.iterrows():
             insert_portfolio_row(connection, today, row["Symbol"], row["Quantity"], row["Average Cost"],
                                     row["Industry"], row["Market Price (CAD)"], row["Market Value (CAD)"], row["Weight"])
-                
+        
+        # ── Write Ticker Items to Report File ───────────────────────────────────────        
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"\n{'='*60}")
             f.write(f"  {user_name} - {today}")
