@@ -381,10 +381,13 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
 
     h_garch = (res.conditional_volatility / 100) ** 2
     sigma_t = np.sqrt(h_garch)
-    sigma_current_daily = sigma_t[-1]
+
+    forecast = res.forecast(horizon=1, reindex=False)
+    h_next = forecast.variance.values[-1, 0] / 1e4
+    sigma_current_daily = np.sqrt(h_next)
     sigma_total_annual = np.sqrt(
         (b_MKT ** 2 * factor_vols[0] ** 2 + b_SMB ** 2 * factor_vols[1] ** 2 + b_HML ** 2 * factor_vols[2] ** 2) * 252
-        + h_garch[-1] * 252
+        + h_next * 252
     )
 
     pvalues = res.pvalues
