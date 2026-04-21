@@ -31,7 +31,7 @@ import json
 import traceback
 from pathlib import Path
 from curl_cffi import requests
-from database.db import init_database, insert_portfolio_row, insert_model_output, insert_recommendation
+from database.db import init_database, insert_portfolio_row, insert_model_output, insert_recommendation, insert_virtual_portfolio
 
 np.random.seed(42)
 
@@ -696,7 +696,47 @@ def compute_confidence_score(n_obs, r_squared, garch_persist):
 
     return score, confidence
 
-def reconcile_virtual_portfolio(conn):
+
+def fetch_opening_prices(tickers, start):
+    """
+    Fetche opening prices for the tickers from the start date to today
+    
+    Args:
+        tickers: list of tickers
+        start: start date
+        
+    Returns:
+        price dataframe
+    """
+    for attempt in range(5):
+        wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
+        try:
+            session = requests.Session(impersonate="chrome")
+            data = yf.download(
+                tickers, start=start, end=END_DATE,
+                auto_adjust=True, progress=False, threads=False, session=session
+            )['Open']
+            if data.empty:
+                raise ValueError("Download returned empty DataFrame (likely rate limited).")
+            
+            opening_prices = data.apply(lambda col: col.dropna().iloc[0] if not col.dropna().empty else None)
+            missing = [t for t, p in opening_prices.items() if p is None]
+            if missing:
+                print(f"  [WARN] No opening price found for {missing}, extending start by 1 days...")
+                start = start - timedelta(days=1)
+                # This could result in grabbing opening prices BEFORE the recommendation ran. Giving the
+                # VP false price values to work off of.
+                continue
+
+        except Exception as e:
+            if attempt < 4:
+                print(f"  [WARN] Download failed ({e}). Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise RuntimeError(f"Failed to download opening price data after 5 attempts: {e}")      
+
+
+def reconcile_virtual_portfolio(conn, today, raw_prices, file=None):
     """
     Tracks a virtual portfolio based on recommendations from last week
     
@@ -708,7 +748,156 @@ def reconcile_virtual_portfolio(conn):
     Returns:
     
     """
+    count = conn.execute("SELECT COUNT(*) FROM virtual_portfolio").fetchone()[0]
+
+    if count == 0:
+        print(f"  [WARNING] No entries found in virtual portfolio database. First run.", file=file)
+        return
     
+    last_rec_date = conn.execute("SELECT MAX(date) FROM recommendations WHERE date < ?", (today,)).fetchone()[0]
+    if last_rec_date == None:
+        print(f"  [ERROR] Last date query returned None.", file=file)
+        return
+    last_date =  datetime.strptime(last_rec_date, "%Y-%m-%d")
+    days_since = (today - last_date).days
+    if days_since > 14:
+        print(f"  [WARNING] VP tracker working on larger gap than expected. {days_since} days.", file=file)
+    
+    last_rec = conn.execute("SELECT ticker, recommended_weight, strategy FROM recommendations WHERE date = ?", (last_rec_date,)).fetchall()
+    weights_by_strategy = {}
+    for ticker, weight, strategy in last_rec:
+        weights_by_strategy.setdefault(strategy, {})[ticker] = weight
+        
+    # Sanity check for the returned weights
+    weight_sums = {strategy: sum(weights.values()) for strategy, weights in weights_by_strategy.items()}
+    for strategy, total in weight_sums.items():
+        if abs(total - 1.0) > 0.00001:
+            print(f"  [ERROR] {strategy} weights sum to {total:.6f}, expected 1.0", file=file)
+    
+    last_vp_date = conn.execute("SELECT MAX(date) FROM virtual_portfolio WHERE date < ?", (today,)).fetchone()[0]
+    # Is this necessary?
+    # if (last_vp_date - last_date) > 15:
+    #     print(f"  [WARN] Date mismatch: last recommendation is {last_rec_date} but last virtual portfolio entry is {last_vp_date}. Skipping reconciliation.", file=file)
+    #     return
+    
+    rows = conn.execute("SELECT strategy, SUM(market_value) FROM virtual_portfolio WHERE date = ? GROUP BY strategy", (last_vp_date,)).fetchall()
+    last_vp_values = {strategy: total for strategy, total in rows}
+    last_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (last_rec_date,)).fetchone()[0]
+    opening_vp_value={}
+    # Check if values are approx similar?
+    
+    tickers = set()
+    for ticker, _, _ in last_rec:
+        tickers.add(ticker)
+        
+    opening_date = last_date + timedelta(days=1)
+    opening_prices = fetch_opening_prices(tickers, opening_date)
+    last_vp = conn.execute("SELECT ticker, price, shares, strategy FROM virtual_portfolio WHERE date = ?", (last_rec_date,)).fetchall()
+    for ticker, price, shares, strategy in last_vp:
+        diff = abs(price - opening_prices[ticker])
+        if diff > 0.25*price:
+            print(f"  [WARN] Large Price Movement. {ticker} has changed in value by more than 25%", file=file)
+        opening_vp_value[strategy] = opening_vp_value.get(strategy, 0) + shares * opening_prices[ticker]
+    
+    virtual_portfolio = {}
+    today_count = conn.execute("SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (today,)).fetchone()[0]
+    if today_count > 0:
+        print(f"  [WARN] virtual portfolio already written for {today}. Skipping writes", file=file)
+        # Query data
+        rows = conn.execute("SELECT ticker, strategy, weight, price, quantity, market_value FROM virtual_portfolio WHERE date = ?", (today,)).fetchall()
+        for ticker, strategy, weight, price, shares, market_value in rows:
+            virtual_portfolio.setdefault(strategy, {})[ticker] = {
+                "weight": weight,
+                "shares": shares,
+                "price": price,
+                "market_value": market_value,
+            }
+    else:
+        # Create the virtual portfolio
+        for ticker, weight, strategy in last_rec:
+            market_value = opening_vp_value[strategy] * weight
+            shares = market_value / opening_prices[ticker]
+            virtual_portfolio.setdefault(strategy, {})[ticker] = {
+                "weight": weight,
+                "shares": shares,
+                "price": opening_prices[ticker],
+                "market_value": market_value,
+            }
+        
+        # Sanity check for portfolio value
+        for strategy, tickers in virtual_portfolio.items():
+            computed_total = sum(position["market_value"] for position in tickers.values())
+            if abs(computed_total - opening_vp_value[strategy]) > 0.01:
+                print(f"  [WARN] virtual portfolio value mismatch; computed_total={computed_total}, opening_vp_value={opening_vp_value[strategy]}", file=file)
+
+        # Write date to datebase
+        insert_virtual_portfolio(conn, opening_date, virtual_portfolio)
+    
+    curr_rp_value = conn.execute("SELECT sum(market_value) FROM portfolios WHERE date = ?", (today,)).fetchone()[0]
+    curr_vp_values = {}
+    for strategy, tickers in virtual_portfolio.items():
+        total = sum(
+            pos["shares"] * float(raw_prices[ticker].dropna().iloc[-1])
+            for ticker, pos in tickers.items()
+            if ticker in raw_prices.columns
+        )
+        curr_vp_values[strategy] = total
+    
+    real_pct_change = (curr_rp_value - last_rp_value) / last_rp_value
+    virtual_pct_change = {s: (curr_vp_values[s] - last_vp_values[s]) / last_vp_values[s] for s in curr_vp_values}
+    dollar_divergence = {s: (curr_vp_values[s] - curr_rp_value) for s in curr_vp_values}
+    return_pct_divergence = {s: (dollar_divergence[s] / curr_rp_value) for s in dollar_divergence}
+    real_weights = conn.execute("SELECT ticker, weight FROM portfolios WHERE date = ?", (today,)).fetchall()
+    # Virtual weights is in weights by strategy
+    
+    print(f"\n{'='*70}", file=file)
+    print(f"  PORTFOLIO DIVERGENCE SUMMARY — {today}", file=file)
+    print(f"{'='*70}", file=file)
+
+    # Top line
+    print(f"\n  {'Strategy':<15} {'Virtual Return':>16} {'Real Return':>14} {'$ Divergence':>14} {'% Divergence':>14}", file=file)
+    print(f"  {'-'*73}", file=file)
+    for s in curr_vp_values:
+        print(f"  {s:<15} {virtual_pct_change[s]:>+15.2%} {real_pct_change:>+13.2%} {dollar_divergence[s]:>+13.2f} {return_pct_divergence[s]:>+13.2%}", file=file)
+
+    # Per-ticker contribution breakdown
+    real_weights_dict = dict(real_weights)
+    print(f"\n  KEY ASSET CONTRIBUTIONS", file=file)
+    for strategy, tickers in virtual_portfolio.items():
+        print(f"\n  [{strategy}]", file=file)
+        print(f"  {'Ticker':<10} {'Virt Wt':>9} {'Real Wt':>9} {'Wt Diff':>9} {'Return':>9} {'Contribution':>13}", file=file)
+        contributions = []
+        for ticker, pos in tickers.items():
+            if ticker not in raw_prices.columns:
+                continue
+            curr_price = float(raw_prices[ticker].dropna().iloc[-1])
+            ticker_return = (curr_price - pos["price"]) / pos["price"]
+            virt_w = pos["weight"]
+            real_w = real_weights_dict.get(ticker, 0.0)
+            contribution = (virt_w - real_w) * ticker_return
+            contributions.append((ticker, virt_w, real_w, ticker_return, contribution))
+        
+        contributions.sort(key=lambda x: abs(x[4]), reverse=True)
+        for ticker, virt_w, real_w, ret, contrib in contributions[:10]:
+            print(f"  {ticker:<10} {virt_w:>9.1%} {real_w:>9.1%} {virt_w-real_w:>+9.1%} {ret:>+9.2%} {contrib:>+13.2%}", file=file)
+
+    # Cumulative running difference (from DB history)
+    history = conn.execute("""
+        SELECT v.date, v.strategy, SUM(v.market_value) as vp_val, p.rp_val
+        FROM virtual_portfolio v
+        JOIN (SELECT date, SUM(market_value) as rp_val FROM portfolios GROUP BY date) p
+            ON v.date = p.date
+        GROUP BY v.date, v.strategy
+        ORDER BY v.date
+    """).fetchall()
+
+    print(f"\n  CUMULATIVE DIVERGENCE HISTORY", file=file)
+    print(f"  {'Date':<12} {'Strategy':<15} {'VP Value':>12} {'RP Value':>12} {'Divergence':>12}", file=file)
+    for date, strategy, vp_val, rp_val in history:
+        print(f"  {date:<12} {strategy:<15} {vp_val:>12.2f} {rp_val:>12.2f} {vp_val - rp_val:>+12.2f}", file=file)
+
+    print(f"\n{'='*70}", file=file)
+
     
 
 def plot_outputs(ticker, ret, fm, g, mc, user_path):
@@ -868,6 +1057,11 @@ def test_db(conn, run_date: str, user_name: str):
     a formatted summary table to the terminal.
     Joins recommendations with model_outputs to include valuation
     metrics alongside the suggested weights.
+    
+    Args:
+        conn: Connection to database
+        run_date: Todays date (date of run)
+        user_name: Name of User
     """
     query = """
         SELECT
@@ -917,12 +1111,18 @@ def run_user_pipeline(user_path, cape):
     connection = init_database(user_path)
     
     try:
+        # ── Construct Report Directory ────────────────────────────────────────── 
+        today = END_DATE.isoformat()      
+        report_dir = user_path / "reports" / f"{today}"
+        report_dir.mkdir(exist_ok=True)
+        output_path = report_dir / f"recommendation_{today}.txt"
+        vp_output = report_dir / f"virtual_portfolio_{today}.txt"
+        asset_analysis =  report_dir / "asset_analysis"
+        asset_analysis.mkdir(exist_ok=True)
+        
         # ── Load User Config ─────────────────────────────────────────────────────
         config = load_config(user_path)
         user_name = config["name"]  
-        
-        # ── Run Reconciler - Virtual Portfolio ───────────────────────────────────
-        reconcile_virtual_portfolio(connection)
         
         # ── Load User Current Portfolio ──────────────────────────────────────────
         portfolio_df = load_portfolio(user_path)
@@ -933,20 +1133,29 @@ def run_user_pipeline(user_path, cape):
         extra = config.get("extra_tickers", [])
         all_tickers = list(set(tickers + extra)) 
         
-        # ── Construct Report Directory ──────────────────────────────────────────
-        today = date.today().isoformat()
-        
-        report_dir = user_path / "reports" / f"{today}"
-        report_dir.mkdir(exist_ok=True)
-        output_path = report_dir / f"recommendation_{today}.txt"
-        asset_analysis =  report_dir / "asset_analysis"
-        asset_analysis.mkdir(exist_ok=True)
-        
-        # ── Per Ticker Analysis ─────────────────────────────────────────────────
         raw_prices = fetch_prices(all_tickers)
         ff_factors = fetch_ff_factors()
         rf_ann = float(ff_factors['RF'].mean() * 252)
         
+        # ── Compute current market weights from shares × latest price ────────────
+        total_value = portfolio_df['Book Value (CAD)'].sum()
+        portfolio_df['Weight'] = portfolio_df['Book Value (CAD)'] / total_value
+        portfolio_df['Average Cost'] = portfolio_df['Book Value (CAD)'] / portfolio_df['Quantity']
+        portfolio_df['Market Price (CAD)'] = portfolio_df.apply(
+            lambda r: r['Market Price'] / usd_cad if r['Market Price Currency'] == 'USD' else r['Market Price'], axis=1
+        )
+        portfolio_df['Market Value (CAD)'] = portfolio_df['Quantity'] * portfolio_df['Market Price (CAD)']
+
+        # ── Write Current Portfolio Items to Database ────────────────────────────
+        for _, row in portfolio_df.iterrows():
+            insert_portfolio_row(connection, today, row["Symbol"], row["Quantity"], row["Average Cost"],
+                                    row["Industry"], row["Market Price (CAD)"], row["Market Value (CAD)"], row["Weight"])
+            
+        # ── Run Reconciler - Virtual Portfolio ───────────────────────────────────
+        with open(asset_analysis_output, 'w', encoding='utf-8') as f:
+            reconcile_virtual_portfolio(connection, today, raw_prices, f)
+        
+        # ── Per Ticker Analysis ─────────────────────────────────────────────────        
         results = []
         db_results = []
         returns_dict = {}   # {ticker: log_ret} for covariance matrix
@@ -1033,20 +1242,6 @@ def run_user_pipeline(user_path, cape):
 
                 except Exception as e:
                     f.write(f"  [WARN] {ticker} failed: {e}")
-
-        # ── Compute current market weights from shares × latest price ────────────
-        total_value = portfolio_df['Book Value (CAD)'].sum()
-        portfolio_df['Weight'] = portfolio_df['Book Value (CAD)'] / total_value
-        portfolio_df['Average Cost'] = portfolio_df['Book Value (CAD)'] / portfolio_df['Quantity']
-        portfolio_df['Market Price (CAD)'] = portfolio_df.apply(
-            lambda r: r['Market Price'] / usd_cad if r['Market Price Currency'] == 'USD' else r['Market Price'], axis=1
-        )
-        portfolio_df['Market Value (CAD)'] = portfolio_df['Quantity'] * portfolio_df['Market Price (CAD)']
-
-        # ── Write Ticker Items to Database ───────────────────────────────────────
-        for _, row in portfolio_df.iterrows():
-            insert_portfolio_row(connection, today, row["Symbol"], row["Quantity"], row["Average Cost"],
-                                    row["Industry"], row["Market Price (CAD)"], row["Market Value (CAD)"], row["Weight"])
         
         # ── Write Ticker Items to Report File ───────────────────────────────────────        
         with open(output_path, 'w', encoding='utf-8') as f:
