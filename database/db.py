@@ -63,7 +63,7 @@ def init_database(user_path):
 					ttm_pe              REAL,
 					peg_ratio           REAL,
 					ev_ebitda           REAL,
-     				target_price		REAL
+     				target_price		REAL,
 					analyst_rec			TEXT,
 					ma_200				REAL,
 					ma_50				REAL,

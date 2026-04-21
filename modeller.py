@@ -430,6 +430,9 @@ def run_monte_carlo(mu, sigma, S0, file=None):
     S_current = S0
     df_t = 6
     t_scale = np.sqrt((df_t - 2) / df_t)
+    
+    # mu    = np.clip(mu,    -2.0,  2.0)   # cap at ±200% annual return
+    # sigma = np.clip(sigma,  0.01, 2.0)   # cap at 1%–200% annual vol
 
     print(f"\n[Monte Carlo Simulation]", file=file)
     print(f"  Paths      : {N_paths:,}", file=file)
@@ -522,7 +525,9 @@ def fetch_valuation_metrics(ticker, force_refresh=False):
                 'ttm_pe': info.get('trailingPE'),
                 'ev_ebitda': info.get('enterpriseToEbitda'),
                 'target_price': info.get('targetMeanPrice'),
-                'analyst_rec': info.get('recommendationMean'),
+                'analyst_rec': {1: 'Strong Buy', 2: 'Buy', 3: 'Hold', 4: 'Underperform', 5: 'Sell'}.get(
+                    round(info.get('recommendationMean') or 0) or None
+                ),
                 '200MA': info.get('twoHundredDayAverage'),
                 '50MA': info.get('fiftyDayAverage'),
                 'earnings_growth': info.get('earningsGrowth'),
@@ -823,7 +828,55 @@ def plot_outputs(ticker, ret, fm, g, mc, user_path):
     path = user_path / "asset_analysis" / filename
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=DARK)
     plt.close()
-    print(f"\n[Done]  Plot saved to {path}")     
+    print(f"\n[Done]  Plot saved to {path}")
+
+
+def test_db(conn, run_date: str, user_name: str):
+    """
+    Read today's recommendations back from the database and print
+    a formatted summary table to the terminal.
+    Joins recommendations with model_outputs to include valuation
+    metrics alongside the suggested weights.
+    """
+    query = """
+        SELECT
+            r.strategy,
+            r.ticker,
+            ROUND(r.current_weight * 100, 1)     AS current_pct,
+            ROUND(r.recommended_weight * 100, 1)  AS suggested_pct,
+            ROUND((r.recommended_weight - r.current_weight) * 100, 1) AS change_pct,
+            r.action,
+            ROUND(r.mu_annual * 100, 1)           AS mu_pct,
+            ROUND(r.sigma_annual * 100, 1)         AS sigma_pct,
+            m.forward_pe,
+            m.peg_ratio,
+            m.ev_ebitda,
+            m.cape
+        FROM recommendations r
+        JOIN model_outputs m
+            ON r.date = m.date AND r.ticker = m.ticker
+        WHERE r.date = ?
+        ORDER BY
+            r.strategy,
+            CASE r.action
+                WHEN 'BUY'  THEN 1
+                WHEN 'HOLD' THEN 2
+                WHEN 'SELL' THEN 3
+            END
+    """
+    
+    df = pd.read_sql_query(query, conn, params=(run_date,))
+    
+    if df.empty:
+        print(f"  [WARNING] No recommendations found in database for {run_date}")
+        return
+    
+    print(f"\n{'='*70}")
+    print(f"  RECOMMENDATIONS — {user_name} — {run_date}")
+    print(f"  Market CAPE: {df['cape'].iloc[0]:.1f}")
+    print(f"{'='*70}")
+    print(df.to_string(index=False))
+    print(f"{'='*70}\n")
 
 
 def run_user_pipeline(user_path, cape):
@@ -834,7 +887,7 @@ def run_user_pipeline(user_path, cape):
     
     try:
         config = load_config(user_path)
-        name = config["name"]    
+        user_name = config["name"]    
         portfolio_df = load_portfolio(user_path)
         usd_cad = yf.Ticker("USDCAD=X").fast_info['lastPrice']
         
@@ -937,7 +990,7 @@ def run_user_pipeline(user_path, cape):
                         "cape": cape
                     })
                     
-                    insert_model_output(connection, today, ticker, list(db_results.values())[-1])
+                    insert_model_output(connection, today, ticker, db_results[-1])
 
                 except Exception as e:
                     f.write(f"  [WARN] {ticker} failed: {e}")
@@ -958,7 +1011,7 @@ def run_user_pipeline(user_path, cape):
                 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"\n{'='*60}")
-            f.write(f"  {name} - {today}")
+            f.write(f"  {user_name} - {today}")
             f.write(f"  Current CAPE: {cape:.2f}")
             f.write(f"{'='*60}")
             # ── Per-ticker summary table ──────────────────────────────────────────────
@@ -979,6 +1032,8 @@ def run_user_pipeline(user_path, cape):
             else:
                 pprint.pprint(returns_dict)
                 print("\n[WARN] Need at least 2 tickers for portfolio optimisation.")
+                
+        test_db(connection, today, user_name)
     finally:
         connection.close()
 
