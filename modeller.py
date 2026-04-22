@@ -1209,7 +1209,7 @@ def run_user_pipeline(user_path, cape):
     
     try:
         # ── Construct Report Directory ────────────────────────────────────────── 
-        today = END_DATE.isoformat()      
+        today = END_DATE.strftime("%Y-%m-%d")    
         report_dir = user_path / "reports" / f"{today}"
         report_dir.mkdir(exist_ok=True)
         output_path = report_dir / f"recommendation_{today}.txt"
@@ -1246,10 +1246,10 @@ def run_user_pipeline(user_path, cape):
         # ── Write Current Portfolio Items to Database ────────────────────────────
         for _, row in portfolio_df.iterrows():
             insert_portfolio_row(connection, today, row["Symbol"], row["Quantity"], row["Average Cost"],
-                                    row["Industry"], row["Market Price (CAD)"], row["Market Value (CAD)"], row["Weight"])
+                                    None, row["Market Price (CAD)"], row["Market Value (CAD)"], row["Weight"])
             
         # ── Run Reconciler - Virtual Portfolio ───────────────────────────────────
-        with open(asset_analysis_output, 'w', encoding='utf-8') as f:
+        with open(vp_output, 'w', encoding='utf-8') as f:
             reconcile_virtual_portfolio(connection, today, raw_prices, f)
         
         # ── Per Ticker Analysis ─────────────────────────────────────────────────        
@@ -1279,6 +1279,11 @@ def run_user_pipeline(user_path, cape):
                     mu_dict[ticker] = fm["mu_annual"]
                     sigma_dict[ticker] = g["sigma_total_annual"]
                     portfolio_df.loc[portfolio_df['Symbol'] == ticker, 'Industry'] = val.get('industry')
+                    connection.execute(
+                        "UPDATE portfolios SET asset_class = ? WHERE date = ? AND ticker = ?",
+                        (val.get('industry'), today, ticker)
+                    )
+                    connection.commit()
 
                     results.append({
                         "ticker": ticker,
