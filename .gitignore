@@ -6,3 +6,4 @@ ff_factors_cache.parquet
 users/
 valuation_cache.json
 improvements.txt
+.env
