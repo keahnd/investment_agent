@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+prices_cache.parquet
+ff_factors_cache.parquet
+users/*/portfolio.csv
+users/*/reports/
+users/*/history.db
+valuation_cache.json
+improvements.txt
