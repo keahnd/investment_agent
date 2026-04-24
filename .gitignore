@@ -3,8 +3,6 @@ __pycache__/
 *.pyo
 prices_cache.parquet
 ff_factors_cache.parquet
-users/*/portfolio.csv
-users/*/reports/
-users/*/history.db
+users/
 valuation_cache.json
 improvements.txt

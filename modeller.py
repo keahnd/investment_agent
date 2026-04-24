@@ -690,7 +690,7 @@ def compute_confidence_score(n_obs, r_squared, garch_persist):
     """
     history_score = min(1.0, max(0.0, (n_obs - 252) / (1260 - 252)))
     r2_score = min(1.0, max(0.0, r_squared))
-    garch_score = 1.0 - max(0.0, (garch_persist - 0.90) / 0.09)
+    garch_score = max(0.0, 1.0 - max(0.0, (garch_persist - 0.90) / 0.09))
     score = 0.50 * history_score + 0.30 * r2_score + 0.20 * garch_score
 
     if score >= 0.70:
@@ -1322,6 +1322,7 @@ def run_user_pipeline(user_path, cape):
                         "CVaR_95": mc["CVaR_95"],
                         "prob_up": mc["prob_up"],
                         "confidence": conf,
+                        "confidence_score": score,
                         **val,
                     })
                     
