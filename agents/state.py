@@ -22,6 +22,7 @@ class PipelineState(TypedDict):
     aaii_sentiment:  Optional[dict]  # {bullish, bearish, neutral}
     fear_greed:      Optional[dict]  # {score, rating}
     earnings_dates:  Optional[dict]  # {ticker: next_earnings_date}
+    earnings_data:   Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
 
     # ── Agent 2 outputs ──────────────────────────────────────────
     factor_results:    Optional[dict]  # {ticker: {betas, alpha, R2}}
