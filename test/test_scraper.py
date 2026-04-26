@@ -9,7 +9,10 @@ from agents.agent1_data_harvester import (
     fetch_fear_greed,
     fetch_earnings_data,
     scrape_yahoo_finance,
-    scrape_seeking_alpha
+    scrape_seeking_alpha,
+    _resolve_channel_video_urls,
+    fetch_youtube_transcript,
+    extract_ticker_mentions
 )
 
 # Test 1 — Finviz
@@ -45,3 +48,8 @@ from agents.agent1_data_harvester import (
 # print(f"  Result: {sa_news}")
 
 # Test 6 - Podcast Retrieval
+print("\nTesting Podcast Transcript Retrieval...")
+video_url = _resolve_channel_video_urls("https://www.youtube.com/@ProfGMarkets", n=3)
+transcript = fetch_youtube_transcript(video_url[2], "Prof G Markets")
+mentions = extract_ticker_mentions(transcript, "aapl", "Apple")
+print(f"  Transcript: {transcript}\nMentions:{mentions}")

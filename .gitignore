@@ -1,9 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
-prices_cache.parquet
-ff_factors_cache.parquet
 users/
-valuation_cache.json
+cache/
 improvements.txt
 .env

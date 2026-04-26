@@ -26,6 +26,7 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
@@ -103,6 +104,7 @@ def scrape_finviz(ticker: str) -> list[dict]:
             continue
 
         headline_tag = cells[1].find("a")
+        url = headline_tag["href"]
         source_tag   = cells[1].find("span")
 
         if not headline_tag:
@@ -113,6 +115,8 @@ def scrape_finviz(ticker: str) -> list[dict]:
             "time":     time_str,
             "source":   source_tag.text.strip() if source_tag else "",
             "headline": headline_tag.text.strip(),
+            "url":		url,
+            "full_text":fetch_article_text(url)
         })
 
     return results
@@ -216,9 +220,25 @@ def fetch_fear_greed() -> dict:
         return {"score": None, "rating": "unknown", "error": str(e)}
 
 
+def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
+    """
+    Given a YouTube channel URL (/@Handle or /channel/ID), fetches the channel's
+    /videos page and returns the URLs of the most recent n uploads.
+    Returns empty list on failure.
+    """
+    videos_url = channel_url.rstrip("/") + "/videos"
+    try:
+        response = requests.get(videos_url, headers=HEADERS, timeout=10)
+        video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', response.text)))
+        return [f"https://www.youtube.com/watch?v={vid}" for vid in video_ids[:n]]
+    except Exception as e:
+        print(f"    [warn] Could not resolve videos from {channel_url}: {e}")
+    return []
+
+
 def fetch_youtube_transcript(url: str, name: str) -> str:
     """
-    Fetches auto-captions for a YouTube video.
+    Fetches auto-captions for a YouTube video URL (watch?v=... or youtu.be/...).
     Returns the full transcript as a single string, or empty string on failure.
     """
     # Extract video ID — handles both youtube.com/watch?v= and youtu.be/ formats
@@ -230,8 +250,8 @@ def fetch_youtube_transcript(url: str, name: str) -> str:
     video_id = match.group(1)
 
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        full_text = " ".join(segment["text"] for segment in transcript)
+        transcript = YouTubeTranscriptApi().fetch(video_id)
+        full_text = " ".join(segment.text for segment in transcript)
         print(f"    [ok]   Transcript fetched for {name} ({len(full_text):,} chars)")
         return full_text
 
@@ -379,15 +399,13 @@ def fetch_earnings_data(ticker: str) -> dict:
     This is separate from valuation metrics (handled by Agent 2) —
     this is specifically for beat/miss history and forward guidance context.
     """
-    try:
-        stock = yf.Ticker(ticker)
-        
+    try:        
         # Earnings history — actual vs estimated EPS per quarter
-        earnings_hist = stock.earnings_dates
+        earnings_hist = yf.Ticker(ticker).earnings_dates
         
         if earnings_hist is not None and not earnings_hist.empty:
             # Most recent 4 quarters
-            recent = earnings_hist.head(4).reset_index()
+            recent = earnings_hist.head(12).reset_index()
             
             quarters = []
             for _, row in recent.iterrows():
@@ -395,8 +413,8 @@ def fetch_earnings_data(ticker: str) -> dict:
                 eps_actual   = row.get("Reported EPS")
                 
                 # Calculate surprise if both values exist
-                surprise_pct = None
-                if eps_estimate and eps_actual and eps_estimate != 0:
+                surprise_pct = row.get("Surprise(%)")
+                if (surprise_pct is None or pd.isna(surprise_pct)) and eps_estimate and eps_actual and eps_estimate != 0:
                     surprise_pct = ((eps_actual - eps_estimate) / abs(eps_estimate)) * 100
                 
                 quarters.append({
@@ -419,7 +437,7 @@ def fetch_earnings_data(ticker: str) -> dict:
     except Exception as e:
         print(f"    [warn] Earnings data fetch failed for {ticker}: {e}")
     
-    return {"recent_quarters": [], "avg_eps_surprise_pct": None}
+    return {"recent_quarters": [], "avg_eps_surprise_pct": None, "consecutive_beats": None}
 
 
 def _count_consecutive_beats(quarters: list) -> int:
@@ -437,49 +455,37 @@ def _count_consecutive_beats(quarters: list) -> int:
     return count
 
 
-def fetch_earnings_dates(tickers: list[str]) -> dict:
+def extract_ticker_mentions(transcript: str, ticker: str, company_name: int, window: int = 600) -> str:
     """
-    Fetches the next earnings date for each ticker via yfinance.
-    Returns {ticker: date_string or None}.
-    """
-    earnings = {}
-
-    for ticker in tickers:
-        try:
-            info = yf.Ticker(ticker).calendar
-            if info is not None and not info.empty:
-                # calendar is a DataFrame — columns are the earnings dates
-                next_date = str(info.columns[0].date())
-                earnings[ticker] = next_date
-            else:
-                earnings[ticker] = None
-        except Exception:
-            earnings[ticker] = None
-
-        time.sleep(GENERAL_DELAY)
-
-    return earnings
-
-
-def extract_ticker_mentions(transcript: str, ticker: str, window: int = 600) -> str:
-    """
-    Extracts text windows around each mention of a ticker in a transcript.
-    Returns a concatenated string of all relevant passages.
+    Extracts text windows around each mention of a ticker or its company name.
+    Searches case-insensitively. Returns a concatenated string of all relevant passages.
     A window of 600 characters captures roughly 2-3 sentences of context.
     """
+    lower = transcript.lower()
+    terms = [ticker.lower()]
+    if company_name:
+        # Also search for the first word of the company name (e.g. "Amazon" from "Amazon.com Inc.")
+        first_word = company_name.split()[0].lower().rstrip(".,")
+        if len(first_word) > 3:   # skip short words like "the", "inc"
+            terms.append(first_word)
+        terms.append(company_name.lower())
+
+    seen_ranges: list[tuple[int, int]] = []
     mentions = []
-    start = 0
 
-    while True:
-        idx = transcript.find(ticker, start)
-        if idx == -1:
-            break
-
-        # Extract surrounding context
-        begin = max(0, idx - window // 2)
-        end   = min(len(transcript), idx + window // 2)
-        mentions.append(transcript[begin:end])
-        start = idx + 1
+    for term in terms:
+        start = 0
+        while True:
+            idx = lower.find(term, start)
+            if idx == -1:
+                break
+            begin = max(0, idx - window // 2)
+            end   = min(len(transcript), idx + window // 2)
+            # Deduplicate overlapping windows
+            if not any(b <= idx < e for b, e in seen_ranges):
+                mentions.append(transcript[begin:end])
+                seen_ranges.append((begin, end))
+            start = idx + 1
 
     return "\n...\n".join(mentions)
 
@@ -510,11 +516,11 @@ SUMMARISE_PROMPT = """You are a financial analyst summarising market intelligenc
 
 Below is collected text from multiple sources gathered this week.
 Sources are labelled by type — weight them accordingly:
-- SEC filings (8-K, 10-Q): highest weight — primary source, management speaking directly  
-- Reuters / AP wire: high weight — factual, sourced reporting
 - Yahoo Finance articles: medium-high weight — aggregated from credible outlets
-- Finviz headlines: medium weight — useful for topic detection, limited depth
+- Finviz articles: medium-high weight — aggregated from credible outlets
 - Podcast commentary: medium weight if host is credentialed, lower otherwise
+- Seeking Alpha headlines: low weight - useful for topic detection, limited depth
+- Earnings data: high weight - useful to determine if company is generating consistent earnings
 
 Summarise in 4-6 sentences covering:
 - Overall sentiment direction and conviction level
@@ -657,6 +663,20 @@ def agent1_harvester(state: PipelineState) -> dict:
 		# 	print(f"	[ok]	Yahoo Finance: {len(yf_text)} articles")
 		# else:
 		# 	errors.append(f"{ticker}: Yahoo Finance returned no results")
+  
+		# Earnings Data
+		print(f"\n    Fetching earnings data...")
+		earnings = fetch_earnings_data(ticker)
+		if earnings:
+			earnings_text = "\n".join(
+				f"{r['recent_quarters']} {r['avg_eps_surprise_pct']} [{r['consecutive_beats']}]"
+				for r in earnings
+			)
+			write_raw(raw_dir, run_date, ticker, "earnings", earnings_text)
+			ticker_text[ticker].append(f"=== Earnings Data ===\n{earnings_text}")
+			print(f"    [ok]   {ticker} next earnings: {earnings["recent_quarters"][0]["date"] or 'unknown'}")
+		else:
+			errors.append(f"{ticker}: Earnings data returned no results")
 
 	# ── Macro signals (portfolio-level, not per-ticker) ───────────────────────
 	print(f"\n    Fetching macro signals...")
@@ -676,32 +696,39 @@ def agent1_harvester(state: PipelineState) -> dict:
 		errors.append(f"Fear & Greed fetch failed: {fg.get('error')}")
 
 	# ── Podcast transcripts ───────────────────────────────────────────────────
+	# Build ticker → company name map from portfolio CSV
+	company_names: dict[str, str] = {}
+	portfolio_path = user_path / "portfolio.csv"
+	if portfolio_path.exists():
+		port_df = pd.read_csv(portfolio_path)
+		company_names = dict(zip(port_df["Symbol"], port_df["Name"]))
+
 	if podcast_sources:
 		print(f"\n    Fetching {len(podcast_sources)} podcast transcript(s)...")
 
 	for podcast in podcast_sources:
-		transcript = fetch_youtube_transcript(podcast["url"], podcast["name"])
+		url = podcast["url"]
+		if "/@" in url or "/channel/" in url:
+			video_urls = _resolve_channel_video_urls(url, n=1)
+		else:
+			video_urls = [url]
+
+		for video_url in video_urls:
+			transcript = fetch_youtube_transcript(video_url, podcast["name"])
 
 		if transcript:
-			# Store full transcript to disk
-			write_raw(raw_dir, run_date, "PODCAST", podcast["name"], transcript)
-
 			# Find mentions of each ticker and append relevant passages
 			for ticker in tickers:
 				# Check for ticker symbol and company name mentions
-				mentions = extract_ticker_mentions(transcript, ticker)
+				mentions = extract_ticker_mentions(transcript, ticker, company_name=company_names.get(ticker, ""))
 				if mentions:
+					# Store relevant information to disk
+					write_raw(raw_dir, run_date, "PODCAST", podcast["name"], mentions)
 					label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
 					ticker_text[ticker].append(f"{label}\n{mentions}")
 					print(f"    [ok]   Found {ticker} mentions in {podcast['name']}")
 
 		time.sleep(GENERAL_DELAY)
-
-	# ── Earnings calendar ─────────────────────────────────────────────────────
-	print(f"\n    Fetching earnings dates...")
-	earnings = fetch_earnings_dates(tickers)
-	for ticker, dt in earnings.items():
-		print(f"    [ok]   {ticker} next earnings: {dt or 'unknown'}")
 
 	# ── LLM summarisation ─────────────────────────────────────────────────────
 	print(f"\n    Summarising collected text via LLM...")
