@@ -38,9 +38,9 @@ np.random.seed(42)
 END_DATE = datetime.today()  #(2026, 4, 17) #.today()
 LOOKBACK_DAYS = 5 * 365
 START_DATE = END_DATE - timedelta(days=LOOKBACK_DAYS)
-CACHE_FILE = "prices_cache.parquet"
-FF_CACHE_FILE = "ff_factors_cache.parquet"
-VAL_CACHE_FILE = "valuation_cache.json"
+CACHE_FILE = "cache/prices_cache.parquet"
+FF_CACHE_FILE = "cache/ff_factors_cache.parquet"
+VAL_CACHE_FILE = "cache/valuation_cache.json"
 USERS_DIR = Path("users")
 INFLATION_RATE = 0.025
 
