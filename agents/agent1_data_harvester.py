@@ -84,7 +84,7 @@ def scrape_finviz(ticker: str) -> list[dict]:
     results = []
     current_date = None
 
-    for row in news_table.find_all("tr"):
+    for row in news_table.find_all("tr"): # limit to lower number of articles??
         cells = row.find_all("td")
         if len(cells) < 2:
             continue
@@ -115,8 +115,8 @@ def scrape_finviz(ticker: str) -> list[dict]:
             "time":     time_str,
             "source":   source_tag.text.strip() if source_tag else "",
             "headline": headline_tag.text.strip(),
-            "url":		url,
-            "full_text":fetch_article_text(url)
+            "url":      url,
+            "full_text": "",
         })
 
     return results
@@ -280,21 +280,15 @@ def scrape_yahoo_finance(ticker: str) -> list[dict]:
             description = item.find("description")
             
             results.append({
-                "title":       title.text if title else "",
-                "url":         article_url.text if article_url else "",
-                "published":   pub_date.text if pub_date else "",
+                "title":       	title.text if title else "",
+                "url":         	article_url.text if article_url else "",
+                "published":   	pub_date.text if pub_date else "",
                 # description is often a snippet — better than nothing
                 # if full article fetch fails
-                "snippet":     description.text if description else "",
+                "snippet":     	description.text if description else "",
+                "full_text":	""
             })
-        
-        # Now fetch full article text for each
-        for result in results:
-            if result["url"]:
-                full_text = fetch_article_text(result["url"])
-                result["full_text"] = full_text
-                time.sleep(GENERAL_DELAY)
-        
+
         return results
         
     except Exception as e:
@@ -327,9 +321,37 @@ def fetch_article_text(url: str) -> str:
             return ""
         
         return text[:5000]   # cap at 5000 chars per article
-        
+
     except Exception as e:
         return ""
+
+
+def filter_relevant_headlines(ticker: str, company_name: str, articles: list[dict], n: int = 5) -> list[dict]:
+    """
+    Passes article headlines to a small LLM and returns the n most relevant
+    for the given ticker. articles must have a 'headline' or 'title' key and a 'url' key.
+    Falls back to first n articles if the LLM call fails.
+    """
+    if not articles:
+        return []
+    name_hint = f" ({company_name})" if company_name else ""
+    numbered = "\n".join(
+        f"{i}. {a.get('headline') or a.get('title', '')}"
+        for i, a in enumerate(articles)
+    )
+    prompt = (
+        f"You are filtering financial news for relevance to {ticker}{name_hint}.\n"
+        f"Return ONLY a comma-separated list of the indices (0-based) of the {n} most "
+        f"relevant headlines below. No explanation.\n\n{numbered}"
+    )
+    try:
+        llm = get_llm()
+        response = llm.invoke(prompt).content.strip()
+        indices = [int(x.strip()) for x in response.split(",") if x.strip().isdigit()]
+        return [articles[i] for i in indices if i < len(articles)]
+    except Exception as e:
+        print(f"    [warn] Headline filter failed for {ticker}: {e}")
+        return articles[:n]
 
 
 def fetch_sec_filings(ticker: str, filing_types: list = ["8-K", "10-Q"]) -> list[dict]:
@@ -404,8 +426,8 @@ def fetch_earnings_data(ticker: str) -> dict:
         earnings_hist = yf.Ticker(ticker).earnings_dates
         
         if earnings_hist is not None and not earnings_hist.empty:
-            # Most recent 4 quarters
-            recent = earnings_hist.head(12).reset_index()
+            # Most recent 12 quarters
+            recent = earnings_hist.head(13).reset_index()
             
             quarters = []
             for _, row in recent.iterrows():
@@ -425,7 +447,7 @@ def fetch_earnings_data(ticker: str) -> dict:
                 })
             
             # Summarise the beat/miss pattern
-            surprises = [q["surprise_pct"] for q in quarters if q["surprise_pct"] is not None]
+            surprises = [q["surprise_pct"] for q in quarters[1:] if q["surprise_pct"] is pd.notna]
             avg_surprise = round(sum(surprises) / len(surprises), 2) if surprises else None
             
             return {
@@ -455,37 +477,30 @@ def _count_consecutive_beats(quarters: list) -> int:
     return count
 
 
-def extract_ticker_mentions(transcript: str, ticker: str, company_name: int, window: int = 600) -> str:
+def extract_ticker_mentions(transcript: str, ticker: str, company_name: str = "", window: int = 600) -> str:
     """
-    Extracts text windows around each mention of a ticker or its company name.
-    Searches case-insensitively. Returns a concatenated string of all relevant passages.
-    A window of 600 characters captures roughly 2-3 sentences of context.
+    Extracts text windows around each whole-word mention of a ticker or company name.
+    Uses regex word boundaries to avoid false positives (e.g. "ITA" inside "capital").
     """
-    lower = transcript.lower()
-    terms = [ticker.lower()]
+    terms = [re.escape(ticker)]
     if company_name:
-        # Also search for the first word of the company name (e.g. "Amazon" from "Amazon.com Inc.")
-        first_word = company_name.split()[0].lower().rstrip(".,")
-        if len(first_word) > 3:   # skip short words like "the", "inc"
-            terms.append(first_word)
-        terms.append(company_name.lower())
+        first_word = company_name.split()[0].rstrip(".,")
+        if len(first_word) > 3:
+            terms.append(re.escape(first_word))
+        if company_name != first_word:
+            terms.append(re.escape(company_name))
 
     seen_ranges: list[tuple[int, int]] = []
     mentions = []
 
     for term in terms:
-        start = 0
-        while True:
-            idx = lower.find(term, start)
-            if idx == -1:
-                break
+        for m in re.finditer(rf"\b{term}\b", transcript, re.IGNORECASE):
+            idx = m.start()
             begin = max(0, idx - window // 2)
             end   = min(len(transcript), idx + window // 2)
-            # Deduplicate overlapping windows
             if not any(b <= idx < e for b, e in seen_ranges):
                 mentions.append(transcript[begin:end])
                 seen_ranges.append((begin, end))
-            start = idx + 1
 
     return "\n...\n".join(mentions)
 
@@ -494,16 +509,18 @@ def extract_ticker_mentions(transcript: str, ticker: str, company_name: int, win
 # FILE I/O HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def write_raw(raw_dir: Path, run_date: str, label: str, source: str, text: str):
+def write_raw(raw_dir: Path, label: str, source: str, text: str):
     """Writes raw scraped text to a dated file. Never overwrites."""
-    filename = f"{run_date}_{label}_{source}.txt"
-    filepath = raw_dir / filename
+    filename = f"{label}_{source}.txt"
+    ticker_dir = raw_dir / label
+    ticker_dir.mkdir(parents=True, exist_ok=True)
+    filepath = raw_dir / label / filename
     filepath.write_text(text, encoding="utf-8")
 
 
-def write_summary(summary_dir: Path, run_date: str, ticker: str, text: str):
+def write_summary(summary_dir: Path, ticker: str, text: str):
     """Writes a summary paragraph to a dated file."""
-    filename = f"{run_date}_{ticker}_summary.txt"
+    filename = f"{ticker}_summary.txt"
     filepath = summary_dir / filename
     filepath.write_text(text, encoding="utf-8")
 
@@ -587,10 +604,17 @@ def agent1_harvester(state: PipelineState) -> dict:
 	print(f"            Tickers : {tickers}")
 
 	# Create output directories
-	raw_dir     = user_path / "data" / "raw"
-	summary_dir = user_path / "data" / "summaries"
+	raw_dir     = user_path / "data" / run_date / "raw"
+	summary_dir = user_path / "data" / run_date / "summaries"
 	raw_dir.mkdir(parents=True, exist_ok=True)
 	summary_dir.mkdir(parents=True, exist_ok=True)
+ 
+ 	# Build ticker → company name map from portfolio CSV
+	company_names: dict[str, str] = {}
+	portfolio_path = user_path / "portfolio.csv"
+	if portfolio_path.exists():
+		port_df = pd.read_csv(portfolio_path)
+		company_names = dict(zip(port_df["Symbol"], port_df["Name"]))
 
 	# Load config for podcast sources
 	config_path = user_path / "config.json"
@@ -607,22 +631,26 @@ def agent1_harvester(state: PipelineState) -> dict:
 	for ticker in tickers:
 		print(f"\n    Scraping {ticker}...")
 
-		# Finviz
+		# Finviz — filter to top 5 relevant headlines, then fetch full text
 		finviz_results = scrape_finviz(ticker)
 		if finviz_results:
+			finviz_results = filter_relevant_headlines(ticker, company_names.get(ticker, ""), finviz_results)
+			for r in finviz_results:
+				r["full_text"] = fetch_article_text(r["url"])
+				time.sleep(GENERAL_DELAY)
 			finviz_text = "\n".join(
-				f"{r['date']} {r['time']} [{r['source']}] {r['headline']}"
+				f"{r['date']} {r['time']} [{r['source']}] {r['headline']}\n{r['full_text']}"
 				for r in finviz_results
 			)
-			write_raw(raw_dir, run_date, ticker, "finviz", finviz_text)
-			ticker_text[ticker].append(f"=== Finviz Headlines ===\n{finviz_text}")
-			print(f"    [ok]   Finviz: {len(finviz_results)} headlines")
+			write_raw(raw_dir, ticker, "finviz", finviz_text)
+			ticker_text[ticker].append(f"=== Finviz Articles ===\n{finviz_text}")
+			print(f"    [ok]   Finviz: {len(finviz_results)} relevant articles")
 		else:
 			errors.append(f"{ticker}: Finviz returned no results")
 
 		time.sleep(FINVIZ_DELAY)
 
-		# Seeking Alpha
+		# Seeking Alpha — headlines only (mostly paywalled, no full text)
 		sa_results = scrape_seeking_alpha(ticker)
 		if sa_results:
 			sa_text = "\n".join(
@@ -630,24 +658,28 @@ def agent1_harvester(state: PipelineState) -> dict:
 				+ (" [paywalled]" if r["paywalled"] else "")
 				for r in sa_results
 			)
-			write_raw(raw_dir, run_date, ticker, "seekingalpha", sa_text)
+			write_raw(raw_dir, ticker, "seekingalpha", sa_text)
 			ticker_text[ticker].append(f"=== Seeking Alpha Headlines ===\n{sa_text}")
 			print(f"    [ok]   Seeking Alpha: {len(sa_results)} headlines")
 		else:
 			errors.append(f"{ticker}: Seeking Alpha returned no results")
 
 		time.sleep(SEEKALPHA_DELAY)
-		
-		# Yahoo Finance
+
+		# Yahoo Finance — filter to top 5 relevant articles, then fetch full text
 		yf_results = scrape_yahoo_finance(ticker)
 		if yf_results:
+			yf_results = filter_relevant_headlines(ticker, company_names.get(ticker, ""), yf_results)
+			for r in yf_results:
+				r["full_text"] = fetch_article_text(r["url"])
+				time.sleep(GENERAL_DELAY)
 			yf_text = "\n".join(
-				f"{r['published']} {r['title']} [{r['snipped']}] {r['full_text']}"
+				f"{r['published']} {r['title']} [{r['snippet']}]\n{r['full_text']}"
 				for r in yf_results
 			)
-			write_raw(raw_dir, run_date, ticker, "yahoofinance", yf_text)
+			write_raw(raw_dir, ticker, "yahoofinance", yf_text)
 			ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
-			print(f"	[ok]	Yahoo Finance: {len(yf_text)} articles")
+			print(f"    [ok]   Yahoo Finance: {len(yf_results)} relevant articles")
 		else:
 			errors.append(f"{ticker}: Yahoo Finance returned no results")
    
@@ -658,7 +690,7 @@ def agent1_harvester(state: PipelineState) -> dict:
 		# 		f"{r['published']} {r['title']} [{r['snipped']}] {r['full_text']}"
 		# 		for r in yf_results
 		# 	)
-		# 	write_raw(raw_dir, run_date, ticker, "yahoofinance", yf_text)
+		# 	write_raw(raw_dir, ticker, "yahoofinance", yf_text)
 		# 	ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
 		# 	print(f"	[ok]	Yahoo Finance: {len(yf_text)} articles")
 		# else:
@@ -668,41 +700,42 @@ def agent1_harvester(state: PipelineState) -> dict:
 		print(f"\n    Fetching earnings data...")
 		earnings = fetch_earnings_data(ticker)
 		if earnings:
-			earnings_text = "\n".join(
-				f"{r['recent_quarters']} {r['avg_eps_surprise_pct']} [{r['consecutive_beats']}]"
-				for r in earnings
-			)
-			write_raw(raw_dir, run_date, ticker, "earnings", earnings_text)
+			if earnings and earnings.get("recent_quarters"):
+				quarters_text = "\n".join(
+					f"{q['date']}  EPS est={q['eps_estimate']}  actual={q['eps_actual']}  surprise={q['surprise_pct']}%"
+					for q in earnings["recent_quarters"]
+				)
+				earnings_text = (
+					f"Avg EPS surprise: {earnings['avg_eps_surprise_pct']}\n"
+					f"Consecutive beats: {earnings['consecutive_beats']}\n"
+					f"{quarters_text}"
+				)
+			write_raw(raw_dir, ticker, "earnings", earnings_text)
 			ticker_text[ticker].append(f"=== Earnings Data ===\n{earnings_text}")
-			print(f"    [ok]   {ticker} next earnings: {earnings["recent_quarters"][0]["date"] or 'unknown'}")
+			print(f"    [ok]   Earnings: {len(earnings['recent_quarters'])} quarters for {ticker}")
 		else:
 			errors.append(f"{ticker}: Earnings data returned no results")
+   
+		break # For testing
 
 	# ── Macro signals (portfolio-level, not per-ticker) ───────────────────────
 	print(f"\n    Fetching macro signals...")
 
 	aaii = fetch_aaii_sentiment()
-	write_raw(raw_dir, run_date, "MARKET", "aaii", json.dumps(aaii, indent=2))
+	write_raw(raw_dir, "MARKET", "aaii", json.dumps(aaii, indent=2))
 	if "error" not in aaii:
 		print(f"    [ok]   AAII: bullish={aaii.get('bullish')} bearish={aaii.get('bearish')}")
 	else:
 		errors.append(f"AAII fetch failed: {aaii.get('error')}")
 
 	fg = fetch_fear_greed()
-	write_raw(raw_dir, run_date, "MARKET", "fear_greed", json.dumps(fg, indent=2))
+	write_raw(raw_dir, "MARKET", "fear_greed", json.dumps(fg, indent=2))
 	if "error" not in fg:
 		print(f"    [ok]   Fear & Greed: {fg.get('score')} ({fg.get('rating')})")
 	else:
 		errors.append(f"Fear & Greed fetch failed: {fg.get('error')}")
 
 	# ── Podcast transcripts ───────────────────────────────────────────────────
-	# Build ticker → company name map from portfolio CSV
-	company_names: dict[str, str] = {}
-	portfolio_path = user_path / "portfolio.csv"
-	if portfolio_path.exists():
-		port_df = pd.read_csv(portfolio_path)
-		company_names = dict(zip(port_df["Symbol"], port_df["Name"]))
-
 	if podcast_sources:
 		print(f"\n    Fetching {len(podcast_sources)} podcast transcript(s)...")
 
@@ -716,17 +749,18 @@ def agent1_harvester(state: PipelineState) -> dict:
 		for video_url in video_urls:
 			transcript = fetch_youtube_transcript(video_url, podcast["name"])
 
-		if transcript:
-			# Find mentions of each ticker and append relevant passages
-			for ticker in tickers:
-				# Check for ticker symbol and company name mentions
-				mentions = extract_ticker_mentions(transcript, ticker, company_name=company_names.get(ticker, ""))
-				if mentions:
-					# Store relevant information to disk
-					write_raw(raw_dir, run_date, "PODCAST", podcast["name"], mentions)
-					label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
-					ticker_text[ticker].append(f"{label}\n{mentions}")
-					print(f"    [ok]   Found {ticker} mentions in {podcast['name']}")
+			if transcript:
+				# Find mentions of each ticker and append relevant passages
+				for ticker in tickers:
+					# Check for ticker symbol and company name mentions
+					mentions = extract_ticker_mentions(transcript, ticker, company_name=company_names.get(ticker, ""))
+					if mentions:
+						# Store relevant information to disk
+						write_raw(raw_dir, "PODCAST", podcast["name"], mentions)
+						label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
+						# Not invluding in agent summary since its not reliable for now
+      					# ticker_text[ticker].append(f"{label}\n{mentions}")
+						print(f"    [ok]   Found {ticker} mentions in {podcast['name']}")
 
 		time.sleep(GENERAL_DELAY)
 
@@ -741,7 +775,7 @@ def agent1_harvester(state: PipelineState) -> dict:
 
 		summary = summarise_ticker_text(ticker, combined)
 		summaries[ticker] = summary
-		write_summary(summary_dir, run_date, ticker, summary)
+		write_summary(summary_dir, ticker, summary)
 		print(f"    [ok]   {ticker}: summary written ({len(summary)} chars)")
 
 	print(f"\n  [Agent 1] Complete. Errors: {len(errors)}")
