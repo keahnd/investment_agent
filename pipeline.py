@@ -42,6 +42,7 @@ def run_user(user_path: Path) -> None:
 		"aaii_sentiment":       None,
 		"fear_greed":           None,
 		"earnings_dates":       None,
+		"earnings_data":	    None,
 		"factor_results":       None,
 		"garch_results":        None,
 		"valuation":            None,
