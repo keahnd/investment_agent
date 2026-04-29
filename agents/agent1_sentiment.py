@@ -1,5 +1,5 @@
 """
-Agent 1 — Data Harvester
+Agent 1 — Sentiment Analysis
 =========================
 Scrapes financial news, sentiment surveys, and podcast transcripts.
 Produces per-ticker text summaries for Agent 4's Black-Litterman
@@ -296,6 +296,89 @@ def scrape_yahoo_finance(ticker: str) -> list[dict]:
         return []
 
 
+def scrape_etf_dot_com(ticker: str) -> list[dict]:
+    """
+    Scrapes the ETF overview page on etf.com for the fund summary and
+    links to recent news articles. Returns list of {title, url, full_text} dicts.
+    """
+    url = f"https://www.etf.com/{ticker}"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"    [warn] etf.com request failed for {ticker}: {e}")
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    results = []
+
+    overview = soup.find("div", class_=re.compile(r"fund-description|etf-description|overview", re.I))
+    if overview:
+        text = overview.get_text(separator=" ", strip=True)
+        if len(text) > 100:
+            results.append({"title": f"{ticker} ETF Overview", "url": url, "full_text": text[:5000]})
+
+    news_section = soup.find(["section", "div"], id=re.compile(r"news", re.I))
+    if not news_section:
+        news_section = soup.find(["section", "div"], class_=re.compile(r"news", re.I))
+    if news_section:
+        for a in news_section.find_all("a", href=True)[:10]:
+            headline = a.get_text(strip=True)
+            href = a["href"]
+            if not href.startswith("http"):
+                href = "https://www.etf.com" + href
+            if headline:
+                results.append({"title": headline, "url": href, "full_text": ""})
+
+    return results
+
+
+def scrape_globe_and_mail(ticker: str) -> list[dict]:
+    """
+    Scrapes recent news from the Globe and Mail stock page for a TSX-listed ticker.
+    Appends '-T' per Globe and Mail's exchange suffix convention (e.g. TD → TD-T).
+    Returns list of {title, url, published, full_text} dicts.
+    """
+    gm_ticker = ticker + "-T"
+    url = f"https://www.theglobeandmail.com/investing/markets/stocks/{gm_ticker}/"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"    [warn] Globe and Mail request failed for {ticker}: {e}")
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    results = []
+
+    for article in soup.find_all("article")[:10]:
+        a_tag = article.find("a", href=True)
+        if not a_tag:
+            continue
+        href = a_tag["href"]
+        if not href.startswith("http"):
+            href = "https://www.theglobeandmail.com" + href
+        headline_tag = article.find(["h2", "h3", "h4"])
+        time_tag = article.find("time")
+        title = headline_tag.get_text(strip=True) if headline_tag else a_tag.get_text(strip=True)
+        published = time_tag.get("datetime", "") if time_tag else ""
+        results.append({"title": title, "url": href, "published": published, "full_text": ""})
+
+    if not results:
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/article/" in href or "/investing/" in href:
+                title = a.get_text(strip=True)
+                if len(title) > 20:
+                    if not href.startswith("http"):
+                        href = "https://www.theglobeandmail.com" + href
+                    results.append({"title": title, "url": href, "published": "", "full_text": ""})
+                    if len(results) >= 10:
+                        break
+
+    return results
+
+
 def fetch_article_text(url: str) -> str:
     """
     Fetches the full text of a news article from its URL.
@@ -352,130 +435,36 @@ def filter_relevant_headlines(ticker: str, company_name: str, articles: list[dic
     except Exception as e:
         print(f"    [warn] Headline filter failed for {ticker}: {e}")
         return articles[:n]
-
-
-def fetch_sec_filings(ticker: str, filing_types: list = ["8-K", "10-Q"]) -> list[dict]:
-    """
-    Fetches recent SEC filings for a ticker via the EDGAR full-text search API.
-    8-K contains material events, earnings releases, and guidance.
-    10-Q contains quarterly financial statements.
-    Both are primary source data — highest credibility.
-    """
-    results = []
     
-    # First get the CIK number for this ticker
-    cik_url = f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22&dateRange=custom&startdt={_ninety_days_ago()}&forms=8-K"
     
+def mention_is_relevant(ticker: str, mentions: list[str], company_name: str = "") -> list[str]:
+    """
+    Checks if ticker mentions in podcast are actually about ticker or incorrect grabs
+    """
+    if not mentions:
+        return []
+    
+    # print(f"Found {len(mentions)} mentions.")
+    name_hint = f" ({company_name})" if company_name else ""
+    numbered = "\n".join(f"{i}. {m}" for i, m in enumerate(mentions))
+    prompt = (
+        f"You are filtering podcast transcript excerpts for relevance to {ticker}{name_hint}.\n"
+        f"Each excerpt below was flagged because it contains the ticker symbol or company name, "
+        f"but some may be false positives (e.g. 'uber' used as an adjective, not Uber the company).\n"
+        f"Return ONLY a comma-separated list of the 0-based indices of excerpts that are genuinely "
+        f"discussing {ticker}{name_hint}. No explanation.\n\n"
+        f"{numbered}"
+    )
     try:
-        # EDGAR search API
-        search_url = "https://efts.sec.gov/LATEST/search-index"
-        params = {
-            "q": f'"{ticker}"',
-            "dateRange": "custom",
-            "startdt": _ninety_days_ago(),
-            "forms": ",".join(filing_types),
-        }
-        
-        response = requests.get(
-            search_url,
-            params=params,
-            headers={**HEADERS, "User-Agent": "Keahn Divecha keahnd@gmail.com"},
-            timeout=10
-        )
-        data = response.json()
-        
-        for hit in data.get("hits", {}).get("hits", [])[:5]:
-            source = hit.get("_source", {})
-            results.append({
-                "form_type":   source.get("form_type", ""),
-                "filed_date":  source.get("file_date", ""),
-                "company":     source.get("entity_name", ""),
-                "description": source.get("period_of_report", ""),
-                "url":         f"https://www.sec.gov/Archives/edgar/data/{source.get('entity_id', '')}/{source.get('file_num', '')}",
-            })
-        
+        llm = get_llm()
+        response = llm.invoke(prompt).content.strip()
+        indices = [int(x.strip()) for x in response.split(",") if x.strip().isdigit()]
+        # print(f"Only {len(indices)} were relevant.")
+        return [mentions[i] for i in indices if i < len(mentions)]
     except Exception as e:
-        print(f"    [warn] SEC EDGAR fetch failed for {ticker}: {e}")
+        print(f"    [warn] Podcast relevance filter failed for {ticker}: {e}")
+        return mentions
     
-    return results
-
-
-def _ninety_days_ago() -> str:
-    """Returns a date string 90 days ago in YYYY-MM-DD format."""
-    return (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
-
-
-def fetch_sec_report_data():
-    """
-    Fetches the information from the SEC fillings.
-    """
-    print(f"Not Implemented yet.")
-
-
-def fetch_earnings_data(ticker: str) -> dict:
-    """
-    Fetches earnings history and upcoming estimates via yfinance.
-    Returns actual vs estimated EPS, surprise percentage, and
-    next quarter estimates.
-    
-    This is separate from valuation metrics (handled by Agent 2) —
-    this is specifically for beat/miss history and forward guidance context.
-    """
-    try:        
-        # Earnings history — actual vs estimated EPS per quarter
-        earnings_hist = yf.Ticker(ticker).earnings_dates
-        
-        if earnings_hist is not None and not earnings_hist.empty:
-            # Most recent 12 quarters
-            recent = earnings_hist.head(13).reset_index()
-            
-            quarters = []
-            for _, row in recent.iterrows():
-                eps_estimate = row.get("EPS Estimate")
-                eps_actual   = row.get("Reported EPS")
-                
-                # Calculate surprise if both values exist
-                surprise_pct = row.get("Surprise(%)")
-                if (surprise_pct is None or pd.isna(surprise_pct)) and eps_estimate and eps_actual and eps_estimate != 0:
-                    surprise_pct = ((eps_actual - eps_estimate) / abs(eps_estimate)) * 100
-                
-                quarters.append({
-                    "date":          str(row.get("Earnings Date", "")),
-                    "eps_estimate":  float(eps_estimate) if eps_estimate else None,
-                    "eps_actual":    float(eps_actual) if eps_actual else None,
-                    "surprise_pct":  round(surprise_pct, 2) if surprise_pct else None,
-                })
-            
-            # Summarise the beat/miss pattern
-            surprises = [q["surprise_pct"] for q in quarters[1:] if q["surprise_pct"] is pd.notna]
-            avg_surprise = round(sum(surprises) / len(surprises), 2) if surprises else None
-            
-            return {
-                "recent_quarters": quarters,
-                "avg_eps_surprise_pct": avg_surprise,
-                "consecutive_beats": _count_consecutive_beats(quarters),
-            }
-    
-    except Exception as e:
-        print(f"    [warn] Earnings data fetch failed for {ticker}: {e}")
-    
-    return {"recent_quarters": [], "avg_eps_surprise_pct": None, "consecutive_beats": None}
-
-
-def _count_consecutive_beats(quarters: list) -> int:
-    """
-    Counts how many consecutive quarters a company has beaten
-    EPS estimates, starting from the most recent.
-    A consistent beat pattern is a mild positive signal.
-    """
-    count = 0
-    for q in quarters:
-        if q["surprise_pct"] is not None and q["surprise_pct"] > 0:
-            count += 1
-        else:
-            break
-    return count
-
 
 def extract_ticker_mentions(transcript: str, ticker: str, company_name: str = "", window: int = 600) -> str:
     """
@@ -502,7 +491,9 @@ def extract_ticker_mentions(transcript: str, ticker: str, company_name: str = ""
                 mentions.append(transcript[begin:end])
                 seen_ranges.append((begin, end))
 
-    return "\n...\n".join(mentions)
+    if not mentions:
+        return ""
+    return "\n...\n".join(mention_is_relevant(ticker, mentions, company_name))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -511,7 +502,7 @@ def extract_ticker_mentions(transcript: str, ticker: str, company_name: str = ""
 
 def write_raw(raw_dir: Path, label: str, source: str, text: str):
     """Writes raw scraped text to a dated file. Never overwrites."""
-    filename = f"{label}_{source}.txt"
+    filename = f"{source}.txt"
     ticker_dir = raw_dir / label
     ticker_dir.mkdir(parents=True, exist_ok=True)
     filepath = raw_dir / label / filename
@@ -533,11 +524,12 @@ SUMMARISE_PROMPT = """You are a financial analyst summarising market intelligenc
 
 Below is collected text from multiple sources gathered this week.
 Sources are labelled by type — weight them accordingly:
-- Yahoo Finance articles: medium-high weight — aggregated from credible outlets
-- Finviz articles: medium-high weight — aggregated from credible outlets
+- Yahoo Finance articles: high weight — aggregated from credible outlets
+- Finviz articles: high weight — aggregated from credible outlets
+- Globe and Mail articles: high weight - aggregated from credible outlets
+- ETF.com articles: high weight - aggregated from credible outlets
 - Podcast commentary: medium weight if host is credentialed, lower otherwise
 - Seeking Alpha headlines: low weight - useful for topic detection, limited depth
-- Earnings data: high weight - useful to determine if company is generating consistent earnings
 
 Summarise in 4-6 sentences covering:
 - Overall sentiment direction and conviction level
@@ -584,207 +576,230 @@ def summarise_ticker_text(ticker: str, text: str) -> str:
 # MAIN AGENT FUNCTION
 # ═════════════════════════════════════════════════════════════════════════════
 
-def agent1_harvester(state: PipelineState) -> dict:
-	"""
-	Agent 1 — Data Harvester
+def agent1_sentiment(state: PipelineState) -> dict:
+    """
+    Agent 1 — Sentiment Analysis
 
-	Runs all scrapers, stores raw text to disk, produces per-ticker
-	summaries via LLM, fetches macro sentiment indicators and earnings dates.
+    Runs all scrapers, stores raw text to disk, produces per-ticker
+    summaries via LLM, fetches macro sentiment indicators and earnings dates.
 
-	Returns state updates for: raw_text, summaries, aaii_sentiment,
-	fear_greed, earnings_dates, errors.
-	"""
-	user_name = state["user_name"]
-	user_path = Path(state["user_path"])
-	tickers   = state["tickers"]
-	run_date  = state["run_date"]
-	errors    = list(state.get("errors") or [])
+    Returns state updates for: raw_text, summaries, aaii_sentiment,
+    fear_greed, earnings_dates, errors.
+    """
+    user_name = state["user_name"]
+    user_path = Path(state["user_path"])
+    tickers   = state["tickers"]
+    run_date  = state["run_date"]
+    errors    = list(state.get("errors") or [])
 
-	print(f"\n  [Agent 1] Data harvester running for {user_name}")
-	print(f"            Tickers : {tickers}")
+    print(f"\n  [Agent 1] Sentiment Analysis running for {user_name}")
+    print(f"            Tickers : {tickers}")
 
-	# Create output directories
-	raw_dir     = user_path / "data" / run_date / "raw"
-	summary_dir = user_path / "data" / run_date / "summaries"
-	raw_dir.mkdir(parents=True, exist_ok=True)
-	summary_dir.mkdir(parents=True, exist_ok=True)
- 
- 	# Build ticker → company name map from portfolio CSV
-	company_names: dict[str, str] = {}
-	portfolio_path = user_path / "portfolio.csv"
-	if portfolio_path.exists():
-		port_df = pd.read_csv(portfolio_path)
-		company_names = dict(zip(port_df["Symbol"], port_df["Name"]))
+    # Create output directories
+    raw_dir     = user_path / "data" / run_date / "raw"
+    summary_dir = user_path / "data" / run_date / "summaries"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    summary_dir.mkdir(parents=True, exist_ok=True)
 
-	# Load config for podcast sources
-	config_path = user_path / "config.json"
-	config = {}
-	if config_path.exists():
-		with open(config_path) as f:
-			config = json.load(f)
+    # Build ticker metadata from portfolio CSV
+    company_names: dict[str, str] = {}
+    yf_symbols:    dict[str, str] = {}   # ticker → yfinance/Yahoo Finance symbol (.TO for TSX)
+    ticker_meta:   dict[str, dict] = {}  # ticker → {exchange, is_etf, is_tsx}
+    portfolio_path = user_path / "portfolio.csv"
+    if portfolio_path.exists():
+        port_df = pd.read_csv(portfolio_path)
+        for _, row in port_df.iterrows():
+            sym      = str(row["Symbol"]).strip()
+            exchange = str(row.get("Exchange", "")).strip()
+            sec_type = str(row.get("Security Type", "EQUITY")).strip()
+            company_names[sym] = str(row.get("Name", ""))
+            yf_symbols[sym]    = sym + ".TO" if exchange == "TSX" else sym
+            ticker_meta[sym]   = {
+                "exchange": exchange,
+                "is_etf":   "ETF" in sec_type.upper(),
+                "is_tsx":   exchange == "TSX",
+            }
 
-	podcast_sources = config.get("podcast_sources", [])
+    # Load config for podcast sources
+    config_path = user_path / "config.json"
+    config = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
 
-	# ── Per-ticker scraping ───────────────────────────────────────────────────
-	ticker_text = {t: [] for t in tickers}   # accumulates all text per ticker
+    podcast_sources = config.get("podcast_sources", [])
 
-	for ticker in tickers:
-		print(f"\n    Scraping {ticker}...")
+    # ── Per-ticker scraping ───────────────────────────────────────────────────
+    ticker_text = {t: [] for t in tickers}   # accumulates all text per ticker
 
-		# Finviz — filter to top 5 relevant headlines, then fetch full text
-		finviz_results = scrape_finviz(ticker)
-		if finviz_results:
-			finviz_results = filter_relevant_headlines(ticker, company_names.get(ticker, ""), finviz_results)
-			for r in finviz_results:
-				r["full_text"] = fetch_article_text(r["url"])
-				time.sleep(GENERAL_DELAY)
-			finviz_text = "\n".join(
-				f"{r['date']} {r['time']} [{r['source']}] {r['headline']}\n{r['full_text']}"
-				for r in finviz_results
-			)
-			write_raw(raw_dir, ticker, "finviz", finviz_text)
-			ticker_text[ticker].append(f"=== Finviz Articles ===\n{finviz_text}")
-			print(f"    [ok]   Finviz: {len(finviz_results)} relevant articles")
-		else:
-			errors.append(f"{ticker}: Finviz returned no results")
+    for ticker in tickers:
+        print(f"\n    Scraping {ticker}...")
+        meta   = ticker_meta.get(ticker, {"exchange": "", "is_etf": False, "is_tsx": False})
+        is_tsx = meta["is_tsx"]
+        is_etf = meta["is_etf"]
+        cname  = company_names.get(ticker, "")
+        yf_sym = yf_symbols.get(ticker, ticker)
 
-		time.sleep(FINVIZ_DELAY)
+        if is_tsx:
+            # ── Canadian stock or ETF → Globe and Mail ────────────────────
+            gm_results = scrape_globe_and_mail(ticker)
+            if gm_results:
+                gm_results = filter_relevant_headlines(ticker, cname, gm_results)
+                for r in gm_results:
+                    r["full_text"] = fetch_article_text(r["url"])
+                    time.sleep(GENERAL_DELAY)
+                gm_text = "\n".join(
+                    f"{r.get('published', '')} {r['title']}\n{r['full_text']}"
+                    for r in gm_results
+                )
+                write_raw(raw_dir, ticker, "globeandmail", gm_text)
+                ticker_text[ticker].append(f"=== Globe and Mail Articles ===\n{gm_text}")
+                print(f"    [ok]   Globe and Mail: {len(gm_results)} relevant articles")
+            else:
+                errors.append(f"{ticker}: Globe and Mail returned no results")
+            time.sleep(GENERAL_DELAY)
 
-		# Seeking Alpha — headlines only (mostly paywalled, no full text)
-		sa_results = scrape_seeking_alpha(ticker)
-		if sa_results:
-			sa_text = "\n".join(
-				f"{r['published']} {r['title']}"
-				+ (" [paywalled]" if r["paywalled"] else "")
-				for r in sa_results
-			)
-			write_raw(raw_dir, ticker, "seekingalpha", sa_text)
-			ticker_text[ticker].append(f"=== Seeking Alpha Headlines ===\n{sa_text}")
-			print(f"    [ok]   Seeking Alpha: {len(sa_results)} headlines")
-		else:
-			errors.append(f"{ticker}: Seeking Alpha returned no results")
+        elif is_etf:
+            # ── US ETF → etf.com ──────────────────────────────────────────
+            etf_results = scrape_etf_dot_com(ticker)
+            if etf_results:
+                etf_results = filter_relevant_headlines(ticker, cname, etf_results)
+                for r in etf_results:
+                    if not r.get("full_text"):
+                        r["full_text"] = fetch_article_text(r["url"])
+                        time.sleep(GENERAL_DELAY)
+                etf_text = "\n".join(
+                    f"{r['title']}\n{r['full_text']}"
+                    for r in etf_results
+                )
+                write_raw(raw_dir, ticker, "etf_dot_com", etf_text)
+                ticker_text[ticker].append(f"=== ETF.com ===\n{etf_text}")
+                print(f"    [ok]   etf.com: {len(etf_results)} relevant articles")
+            else:
+                errors.append(f"{ticker}: etf.com returned no results")
+            time.sleep(GENERAL_DELAY)
 
-		time.sleep(SEEKALPHA_DELAY)
+        else:
+            # ── US Stock → Finviz + Seeking Alpha ─────────────────────────
+            finviz_results = scrape_finviz(ticker)
+            if finviz_results:
+                finviz_results = filter_relevant_headlines(ticker, cname, finviz_results)
+                for r in finviz_results:
+                    r["full_text"] = fetch_article_text(r["url"])
+                    time.sleep(GENERAL_DELAY)
+                finviz_text = "\n".join(
+                    f"{r['date']} {r['time']} [{r['source']}] {r['headline']}\n{r['full_text']}"
+                    for r in finviz_results
+                )
+                write_raw(raw_dir, ticker, "finviz", finviz_text)
+                ticker_text[ticker].append(f"=== Finviz Articles ===\n{finviz_text}")
+                print(f"    [ok]   Finviz: {len(finviz_results)} relevant articles")
+            else:
+                errors.append(f"{ticker}: Finviz returned no results")
+            time.sleep(FINVIZ_DELAY)
 
-		# Yahoo Finance — filter to top 5 relevant articles, then fetch full text
-		yf_results = scrape_yahoo_finance(ticker)
-		if yf_results:
-			yf_results = filter_relevant_headlines(ticker, company_names.get(ticker, ""), yf_results)
-			for r in yf_results:
-				r["full_text"] = fetch_article_text(r["url"])
-				time.sleep(GENERAL_DELAY)
-			yf_text = "\n".join(
-				f"{r['published']} {r['title']} [{r['snippet']}]\n{r['full_text']}"
-				for r in yf_results
-			)
-			write_raw(raw_dir, ticker, "yahoofinance", yf_text)
-			ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
-			print(f"    [ok]   Yahoo Finance: {len(yf_results)} relevant articles")
-		else:
-			errors.append(f"{ticker}: Yahoo Finance returned no results")
-   
-		# SEC Filings
-		# sec_results = fetch_sec_filings(ticker)
-		# if sec_results:
-		# 	yf_text = "\n".join(
-		# 		f"{r['published']} {r['title']} [{r['snipped']}] {r['full_text']}"
-		# 		for r in yf_results
-		# 	)
-		# 	write_raw(raw_dir, ticker, "yahoofinance", yf_text)
-		# 	ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
-		# 	print(f"	[ok]	Yahoo Finance: {len(yf_text)} articles")
-		# else:
-		# 	errors.append(f"{ticker}: Yahoo Finance returned no results")
-  
-		# Earnings Data
-		print(f"\n    Fetching earnings data...")
-		earnings = fetch_earnings_data(ticker)
-		if earnings:
-			if earnings and earnings.get("recent_quarters"):
-				quarters_text = "\n".join(
-					f"{q['date']}  EPS est={q['eps_estimate']}  actual={q['eps_actual']}  surprise={q['surprise_pct']}%"
-					for q in earnings["recent_quarters"]
-				)
-				earnings_text = (
-					f"Avg EPS surprise: {earnings['avg_eps_surprise_pct']}\n"
-					f"Consecutive beats: {earnings['consecutive_beats']}\n"
-					f"{quarters_text}"
-				)
-			write_raw(raw_dir, ticker, "earnings", earnings_text)
-			ticker_text[ticker].append(f"=== Earnings Data ===\n{earnings_text}")
-			print(f"    [ok]   Earnings: {len(earnings['recent_quarters'])} quarters for {ticker}")
-		else:
-			errors.append(f"{ticker}: Earnings data returned no results")
-   
-		break # For testing
+            sa_results = scrape_seeking_alpha(ticker)
+            if sa_results:
+                sa_text = "\n".join(
+                    f"{r['published']} {r['title']}"
+                    + (" [paywalled]" if r["paywalled"] else "")
+                    for r in sa_results
+                )
+                write_raw(raw_dir, ticker, "seekingalpha", sa_text)
+                ticker_text[ticker].append(f"=== Seeking Alpha Headlines ===\n{sa_text}")
+                print(f"    [ok]   Seeking Alpha: {len(sa_results)} headlines")
+            else:
+                errors.append(f"{ticker}: Seeking Alpha returned no results")
+            time.sleep(SEEKALPHA_DELAY)
 
-	# ── Macro signals (portfolio-level, not per-ticker) ───────────────────────
-	print(f"\n    Fetching macro signals...")
+        # ── Yahoo Finance — all tickers, .TO suffix for TSX ───────────────
+        yf_results = scrape_yahoo_finance(yf_sym)
+        if yf_results:
+            yf_results = filter_relevant_headlines(ticker, cname, yf_results)
+            for r in yf_results:
+                r["full_text"] = fetch_article_text(r["url"])
+                time.sleep(GENERAL_DELAY)
+            yf_text = "\n".join(
+                f"{r['published']} {r['title']} [{r['snippet']}]\n{r['full_text']}"
+                for r in yf_results
+            )
+            write_raw(raw_dir, ticker, "yahoofinance", yf_text)
+            ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
+            print(f"    [ok]   Yahoo Finance ({yf_sym}): {len(yf_results)} relevant articles")
+        else:
+            errors.append(f"{ticker}: Yahoo Finance returned no results")
 
-	aaii = fetch_aaii_sentiment()
-	write_raw(raw_dir, "MARKET", "aaii", json.dumps(aaii, indent=2))
-	if "error" not in aaii:
-		print(f"    [ok]   AAII: bullish={aaii.get('bullish')} bearish={aaii.get('bearish')}")
-	else:
-		errors.append(f"AAII fetch failed: {aaii.get('error')}")
+        # break # For testing
 
-	fg = fetch_fear_greed()
-	write_raw(raw_dir, "MARKET", "fear_greed", json.dumps(fg, indent=2))
-	if "error" not in fg:
-		print(f"    [ok]   Fear & Greed: {fg.get('score')} ({fg.get('rating')})")
-	else:
-		errors.append(f"Fear & Greed fetch failed: {fg.get('error')}")
+    # ── Macro signals (portfolio-level, not per-ticker) ───────────────────────
+    print(f"\n    Fetching macro signals...")
 
-	# ── Podcast transcripts ───────────────────────────────────────────────────
-	if podcast_sources:
-		print(f"\n    Fetching {len(podcast_sources)} podcast transcript(s)...")
+    # --- Market Sentiment ---
+    aaii = fetch_aaii_sentiment()
+    write_raw(raw_dir, "MARKET", "aaii", json.dumps(aaii, indent=2))
+    if "error" not in aaii:
+        print(f"    [ok]   AAII: bullish={aaii.get('bullish')} bearish={aaii.get('bearish')}")
+    else:
+        errors.append(f"AAII fetch failed: {aaii.get('error')}")
 
-	for podcast in podcast_sources:
-		url = podcast["url"]
-		if "/@" in url or "/channel/" in url:
-			video_urls = _resolve_channel_video_urls(url, n=1)
-		else:
-			video_urls = [url]
+    fg = fetch_fear_greed()
+    write_raw(raw_dir, "MARKET", "fear_greed", json.dumps(fg, indent=2))
+    if "error" not in fg:
+        print(f"    [ok]   Fear & Greed: {fg.get('score')} ({fg.get('rating')})")
+    else:
+        errors.append(f"Fear & Greed fetch failed: {fg.get('error')}")
 
-		for video_url in video_urls:
-			transcript = fetch_youtube_transcript(video_url, podcast["name"])
+    # ── Podcast transcripts ───────────────────────────────────────────────────
+    if podcast_sources:
+        print(f"\n    Fetching {len(podcast_sources)} podcast transcript(s)...")
 
-			if transcript:
-				# Find mentions of each ticker and append relevant passages
-				for ticker in tickers:
-					# Check for ticker symbol and company name mentions
-					mentions = extract_ticker_mentions(transcript, ticker, company_name=company_names.get(ticker, ""))
-					if mentions:
-						# Store relevant information to disk
-						write_raw(raw_dir, "PODCAST", podcast["name"], mentions)
-						label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
-						# Not invluding in agent summary since its not reliable for now
-      					# ticker_text[ticker].append(f"{label}\n{mentions}")
-						print(f"    [ok]   Found {ticker} mentions in {podcast['name']}")
+    for podcast in podcast_sources:
+        url = podcast["url"]
+        if "/@" in url or "/channel/" in url:
+            video_urls = _resolve_channel_video_urls(url, n=1)
+        else:
+            video_urls = [url]
 
-		time.sleep(GENERAL_DELAY)
+        for video_url in video_urls:
+            transcript = fetch_youtube_transcript(video_url, podcast["name"])
 
-	# ── LLM summarisation ─────────────────────────────────────────────────────
-	print(f"\n    Summarising collected text via LLM...")
-	summaries = {}
-	raw_text_out = {}
+            if transcript:
+                podcast_raw_sections = []
+                for ticker in tickers:
+                    mentions = extract_ticker_mentions(transcript, ticker, company_name=company_names.get(ticker, ""))
+                    if mentions:
+                        label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
+                        ticker_text[ticker].append(f"{label}\n{mentions}")
+                        podcast_raw_sections.append(f"[{ticker}]\n{mentions}")
+                        print(f"    [ok]   Found {ticker} mentions in {podcast['name']}")
 
-	for ticker in tickers:
-		combined = "\n\n".join(ticker_text[ticker])
-		raw_text_out[ticker] = combined
+                if podcast_raw_sections:
+                    write_raw(raw_dir, "PODCAST", podcast["name"], "\n\n".join(podcast_raw_sections))
 
-		summary = summarise_ticker_text(ticker, combined)
-		summaries[ticker] = summary
-		write_summary(summary_dir, ticker, summary)
-		print(f"    [ok]   {ticker}: summary written ({len(summary)} chars)")
+        time.sleep(GENERAL_DELAY)
 
-	print(f"\n  [Agent 1] Complete. Errors: {len(errors)}")
+    # ── LLM summarisation ─────────────────────────────────────────────────────
+    print(f"\n    Summarising collected text via LLM...")
+    summaries = {}
+    raw_text_out = {}
 
-	return {
-		"raw_text":       raw_text_out,
-		"summaries":      summaries,
-		"aaii_sentiment": aaii,
-		"fear_greed":     fg,
-		"earnings_dates": earnings,
-		"errors":         errors,
-	}
+    for ticker in tickers:
+        # Only news text goes to the LLM — AAII, Fear & Greed, and
+        # earnings dates are structured signals that Agent 4 reads directly
+        combined = "\n\n".join(ticker_text[ticker])
+        raw_text_out[ticker] = combined
+
+        summary = summarise_ticker_text(ticker, combined)
+        summaries[ticker] = summary
+        write_summary(summary_dir, ticker, summary)
+        print(f"    [ok]   {ticker}: summary written ({len(summary)} chars)")
+
+    print(f"\n  [Agent 1] Complete. Errors: {len(errors)}")
+
+    return {
+        "raw_text":       raw_text_out,
+        "summaries":      summaries,
+        "aaii_sentiment": aaii,
+        "fear_greed":     fg,
+        "errors":         errors,
+    }
