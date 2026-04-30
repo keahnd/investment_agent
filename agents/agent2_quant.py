@@ -56,17 +56,23 @@ HEADERS = {
 }
 
 
-def _download_with_retry(tickers, start, end):
+def _download_with_retry(tickers: list[str], start: date, end: date) -> pd.DataFrame:
     """
-    Downloads prices for all tickers from start to end dates
-    
+    Downloads daily close prices for the given tickers from yfinance.
+
+    Retries up to 5 times with linear backoff (30s, 60s, 90s, 120s, 150s) to
+    handle rate limiting. Uses a curl_cffi Chrome session to reduce blocking.
+
     Args:
-        tickers: List of tickers to download
-        start: Beginning date for price range
-        end: End date for price range
-        
+        tickers: List of yfinance-compatible ticker symbols.
+        start: Start date for the price history download.
+        end: End date for the price history download.
+
     Returns:
-        dataframe of prices for tickers across the dates
+        DataFrame of adjusted close prices indexed by date, one column per ticker.
+
+    Raises:
+        RuntimeError: If all 5 download attempts fail.
     """
     for attempt in range(5):
         wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
@@ -87,20 +93,23 @@ def _download_with_retry(tickers, start, end):
                 raise RuntimeError(f"Failed to download price data after 5 attempts: {e}")
 
 
-def fetch_prices(tickers, start_date, today, force_refresh=False):
+def fetch_prices(tickers: list[str], start_date: date, today: date, force_refresh: bool = False) -> pd.DataFrame:
     """
-    Fetches asset prices from yfinance for the given tickers only.
-    Factor data (MKT, SMB, HML, RF) is now sourced from fetch_ff_factors().
+    Fetches adjusted close prices for the given tickers with disk caching.
 
-    Results are cached to CACHE_FILE. On subsequent runs only the missing
-    date window is downloaded and appended. Pass force_refresh=True or
-    delete the cache file to re-download everything.
+    On first run, downloads the full history and saves to CACHE_FILE. On
+    subsequent runs, only the missing date window is fetched and appended.
+    New tickers added to an existing portfolio trigger a full-history download
+    for those tickers only.
 
     Args:
-        tickers: List of portfolio tickers to fetch
-        force_refresh: If True, ignore cache and re-download all data
+        tickers: List of yfinance-compatible ticker symbols.
+        start_date: Earliest date to include in the price history.
+        today: Most recent date to fetch (typically the run date).
+        force_refresh: If True, ignores the cache and re-downloads all data.
+
     Returns:
-        Price DataFrame
+        DataFrame of adjusted close prices indexed by date, one column per ticker.
     """
     all_tickers = list(tickers)
 
@@ -140,18 +149,21 @@ def fetch_prices(tickers, start_date, today, force_refresh=False):
     return data
 
 
-def fetch_ff_factors(today, start, force_refresh=False):
+def fetch_ff_factors(today: date, start: date, force_refresh: bool = False) -> pd.DataFrame:
     """
-    Downloads the official Fama-French 3-factor daily data via pandas_datareader.
-    Columns returned (all in decimal, not percent): Mkt-RF, SMB, HML, RF
+    Downloads the Fama-French 3-factor daily data from Ken French's data library.
 
-    Results are cached to FF_CACHE_FILE. Re-downloads the full dataset whenever
-    the cache is stale (the FF dataset is small, ~few MB).
+    Fetches the F-F_Research_Data_Factors_daily_CSV.zip, parses it, and converts
+    from percent to decimal. Results are cached to FF_CACHE_FILE and refreshed
+    when stale (FF data has a few-day publishing lag).
 
     Args:
-        force_refresh: If True, ignore cache and re-download
+        today: Current run date, used to assess cache staleness.
+        start: Earliest date to include after trimming the downloaded dataset.
+        force_refresh: If True, ignores the cache and re-downloads.
+
     Returns:
-        DataFrame indexed by date with columns Mkt-RF, SMB, HML, RF
+        DataFrame indexed by date with columns: Mkt-RF, SMB, HML, RF (all decimal).
     """
     if not force_refresh and os.path.exists(FF_CACHE_FILE):
         cached = pd.read_parquet(FF_CACHE_FILE)
@@ -186,18 +198,24 @@ def fetch_ff_factors(today, start, force_refresh=False):
     return factors
 
 
-def compute_returns(raw, ticker, today, start, ff_factors, file=None):
+def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff_factors: pd.DataFrame, file: io.IOBase | None = None) -> dict:
     """
-    Computes log returns, excess returns, and aligns official FF factor series.
+    Computes log returns, excess returns, and aligns Fama-French factor series.
+
+    Calculates daily log returns from price data, subtracts the day-specific
+    risk-free rate to get excess returns, and aligns with FF factor dates.
 
     Args:
-        raw: Price DataFrame from fetch_prices
-        ticker: Asset ticker string
-        ff_factors: DataFrame from fetch_ff_factors (Mkt-RF, SMB, HML, RF in decimal)
+        raw: Price DataFrame from fetch_prices, indexed by date.
+        ticker: Ticker symbol to extract from the price DataFrame.
+        today: End date of the history window (used for log output only).
+        start: Start date of the history window (used for log output only).
+        ff_factors: DataFrame from fetch_ff_factors with Mkt-RF, SMB, HML, RF columns.
+        file: Optional file object to redirect printed diagnostics. Defaults to stdout.
 
     Returns:
-        dict with log_ret, excess_ret, MKT, SMB, HML, factor_vols,
-              prices, S0, T_hist, rf_daily, rf_ann
+        Dict with keys: log_ret, log_ret_series, excess_ret, MKT, SMB, HML,
+        factor_vols, prices, S0, T_hist, rf_daily, rf_ann.
     """
     price_series = raw[ticker].dropna()
     log_ret_series = np.log(price_series / price_series.shift(1)).dropna()
@@ -245,20 +263,26 @@ def compute_returns(raw, ticker, today, start, ff_factors, file=None):
     }
 
 
-def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, cape, file=None):
+def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, HML: np.ndarray, rf_ann: float, cape: float, file: io.IOBase | None = None) -> dict:
     """
-    Runs 3-factor OLS regression on excess returns.
+    Fits a Fama-French 3-factor OLS regression on daily excess returns.
+
+    Estimates alpha and factor loadings via closed-form OLS, computes p-values
+    via t-distribution, and blends a CAPE-adjusted ERP with the historical
+    factor mean to project an annualised expected return.
 
     Args:
-        excess_ret: Daily excess return array
-        MKT, SMB, HML: Fama-French factor arrays
-        rf_ann: Annualised risk-free rate
-        cape: Current Shiller CAPE ratio, used to blend forward-looking ERP
-        file: File object to write to (defaults to stdout)
+        excess_ret: Daily excess return array (log return minus daily RF).
+        MKT: Daily Mkt-RF factor array.
+        SMB: Daily SMB factor array.
+        HML: Daily HML factor array.
+        rf_ann: Annualised risk-free rate (mean of daily RF * 252).
+        cape: Current Shiller CAPE ratio, used to blend a forward-looking ERP.
+        file: Optional file object to redirect printed diagnostics. Defaults to stdout.
 
     Returns:
-        dict with alpha_daily, b_MKT, b_SMB, b_HML, mu_annual,
-              residuals, r_squared, Y_hat, p_val
+        Dict with keys: alpha_daily, b_MKT, b_SMB, b_HML, mu_annual,
+        residuals, r2, r2_adj, Y_hat, p_val_alpha, rf_ann.
     """
     T_hist = len(excess_ret)
     X = np.column_stack([np.ones(T_hist), MKT, SMB, HML])
@@ -328,18 +352,25 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, cape, file=None):
     }
     
 
-def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
+def run_garch(residuals: np.ndarray, factor_vols: np.ndarray, b_MKT: float, b_SMB: float, b_HML: float, file: io.IOBase | None = None) -> dict:
     """
-    Fits GARCH(1,1) to OLS residuals using the arch library.
+    Fits a GARCH(1,1) model to OLS residuals to estimate idiosyncratic volatility.
+
+    Combines the one-step-ahead GARCH variance forecast with factor variance
+    to produce a total annualised sigma for use in simulation and optimisation.
 
     Args:
-        residuals: Regression residual array
-        factor_vols: Array of [MKT, SMB, HML] daily std devs
-        b_MKT, b_SMB, b_HML: Factor loadings from run_factor_models
+        residuals: Daily idiosyncratic return residuals from run_factor_models.
+        factor_vols: Array of [MKT, SMB, HML] daily standard deviations.
+        b_MKT: Market factor loading from the OLS regression.
+        b_SMB: SMB factor loading from the OLS regression.
+        b_HML: HML factor loading from the OLS regression.
+        file: Optional file object to redirect printed diagnostics. Defaults to stdout.
 
     Returns:
-        dict with h_garch, sigma_t, sigma_total_annual, garch_persist,
-              garch_long_run_vol, pvalues
+        Dict with keys: h_garch, sigma_total_annual, garch_persist,
+        garch_long_run_vol, pvalues, omega_garch, alpha_garch, beta_garch,
+        sigma_current_vol, vol_regime.
     """
     model = arch_model(residuals * 100, vol='Garch', p=1, q=1, dist='normal', rescale=False)
     res = model.fit(disp='off')
@@ -385,15 +416,22 @@ def run_garch(residuals, factor_vols, b_MKT, b_SMB, b_HML, file=None):
     }
     
 
-def fetch_valuation_metrics(ticker, force_refresh=False):
+def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
     """
-    Fetches valuation metrics for ticker from yfinance, with a daily JSON cache.
+    Fetches valuation metrics for a ticker from yfinance with a daily JSON cache.
+
+    Retries up to 4 times with linear backoff on failure. Caches results in
+    VAL_CACHE_FILE keyed by ticker and today's date so each ticker is only
+    fetched once per run.
 
     Args:
-        ticker: Ticker whose information is required
+        ticker: yfinance-compatible ticker symbol.
+        force_refresh: If True, bypasses the cache and re-fetches from yfinance.
 
     Returns:
-        dict: Valuation metrics for ticker
+        Dict with keys: peg, fwd_pe, ttm_pe, ev_ebitda, target_price,
+        analyst_rec, 200MA, 50MA, sector, industry. Values are None if
+        the field is unavailable.
     """
     today = str(date.today())
 
@@ -442,7 +480,18 @@ def fetch_valuation_metrics(ticker, force_refresh=False):
                         'sector': None, 'industry': None}
             
 
-def _pct_change(current, previous):
+def _pct_change(current: float, previous: float) -> float | None:
+    """
+    Computes percentage change from previous to current.
+
+    Args:
+        current: The more recent value.
+        previous: The earlier value used as the base.
+
+    Returns:
+        Percentage change as a decimal (e.g. 0.05 for 5%), rounded to 4 decimal
+        places. Returns None if previous is zero, None, or conversion fails.
+    """
     try:
         if previous and previous != 0:
             return round((float(current) - float(previous)) / abs(float(previous)), 4)
@@ -451,7 +500,19 @@ def _pct_change(current, previous):
     return None
 
 
-def _cagr(current, past, years: int):
+def _cagr(current: float, past: float, years: int) -> float | None:
+    """
+    Computes compound annual growth rate from past to current over the given years.
+
+    Args:
+        current: The ending value.
+        past: The starting value (must be positive).
+        years: Number of years over which to compute the CAGR.
+
+    Returns:
+        CAGR as a decimal (e.g. 0.10 for 10%), rounded to 4 decimal places.
+        Returns None if past is non-positive or conversion fails.
+    """
     try:
         if past and past > 0 and years > 0:
             return round((float(current) / float(past)) ** (1 / years) - 1, 4)
@@ -460,15 +521,24 @@ def _cagr(current, past, years: int):
     return None
 
 
-def fetch_financial_health(ticker: str)-> dict:
+def fetch_financial_health(ticker: str) -> dict:
     """
-    Fetches multi-year financial statement data from yfinance.
-    Computes derived quality metrics rather than returning raw statements.
-    
-    Separate yfinance call from info — financials require .financials,
-    .cashflow, .balance_sheet properties which are distinct API calls.
-    
-    
+    Fetches multi-year financial statement data and computes derived quality metrics.
+
+    Uses yfinance's .financials, .cashflow, and .balance_sheet properties to
+    compute revenue growth, gross margin trend, FCF metrics, earnings quality,
+    debt coverage, and ROIC. Each metric is only included if the required line
+    items are present in the statements.
+
+    Args:
+        ticker: yfinance-compatible ticker symbol.
+
+    Returns:
+        Dict of computed metrics. May include: revenue_growth_1yr,
+        revenue_growth_3yr, revenue_growth_5yr, gross_margin_current,
+        gross_margin_expanding, gross_margin_trend, fcf_current,
+        fcf_growth_1yr, fcf_growth_3yr, fcf_growth_5yr, fcf_margin,
+        earnings_quality, debt_to_fcf, roic. Returns empty dict on failure.
     """
     try:
         stock    = yf.Ticker(ticker)
@@ -549,17 +619,16 @@ def fetch_financial_health(ticker: str)-> dict:
         return {}
 
 
-def fetch_cape():
+def fetch_cape() -> float:
     """
-    Fetch the current Shiller CAPE ratio from multpl.com
-    
-    CAPE > 30 indicates market is overvalued
-    CAPE < 20 indicates market is undervalued
-    
-    If request fails fall back to 25 (neutral market)
-    
+    Fetches the current Shiller CAPE ratio from multpl.com.
+
+    Validates the scraped value is within the plausible range of 10–60.
+    Falls back to 25.0 (a neutral market estimate) on any request or parse failure.
+
     Returns:
-        float: CAPE Shiller value
+        Current CAPE ratio as a float. Returns 25.0 if the request fails or
+        the parsed value is outside the plausible range.
     """
     url = "https://www.multpl.com/shiller-pe"
     
@@ -592,12 +661,20 @@ def fetch_cape():
 
 def fetch_earnings_data(ticker: str) -> dict:
     """
-    Fetches earnings history and upcoming estimates via yfinance.
-    Returns actual vs estimated EPS, surprise percentage, and
-    next quarter estimates.
-    
-    This is separate from valuation metrics (handled by Agent 2) —
-    this is specifically for beat/miss history and forward guidance context.
+    Fetches earnings history and upcoming estimate data via yfinance.
+
+    Retrieves actual vs estimated EPS per quarter, computes surprise
+    percentages where not already provided by yfinance, and identifies
+    the next upcoming earnings date.
+
+    Args:
+        ticker: yfinance-compatible ticker symbol.
+
+    Returns:
+        Dict with keys: next_earnings_date (str or None), recent_quarters
+        (list of dicts with date, eps_estimate, eps_actual, surprise_pct),
+        avg_eps_surprise_pct (float or None), consecutive_beats (int or None).
+        Returns a stub dict with None/empty values on failure.
     """
     try:        
         # Earnings history — actual vs estimated EPS per quarter
@@ -647,11 +724,17 @@ def fetch_earnings_data(ticker: str) -> dict:
     return {"next_earnings_date": None, "recent_quarters": [], "avg_eps_surprise_pct": None, "consecutive_beats": None}
 
 
-def _count_consecutive_beats(quarters: list) -> int:
+def _count_consecutive_beats(quarters: list[dict]) -> int:
     """
-    Counts how many consecutive quarters a company has beaten
-    EPS estimates, starting from the most recent.
-    A consistent beat pattern is a mild positive signal.
+    Counts consecutive quarters with positive EPS surprises, starting from most recent.
+
+    Args:
+        quarters: List of quarter dicts each with a 'surprise_pct' key, expected
+            in chronological descending order (most recent first).
+
+    Returns:
+        Count of consecutive leading quarters where surprise_pct > 0.
+        Returns 0 if the most recent quarter missed or has no surprise data.
     """
     count = 0
     for q in quarters:
@@ -687,8 +770,17 @@ directions if that data is available. Return plain prose, one paragraph per tick
 labelled with the ticker symbol."""
 
 
-def _fmt(val, spec):
-    """Format val with spec, returning 'N/A' if val is None."""
+def _fmt(val: float | None, spec: str) -> str:
+    """
+    Formats a numeric value with a Python format spec, returning 'N/A' for None.
+
+    Args:
+        val: Numeric value to format, or None.
+        spec: Python format spec string (e.g. '.2%', '.3f', '.6f').
+
+    Returns:
+        Formatted string, or 'N/A' if val is None.
+    """
     if val is None:
         return "N/A"
     return format(val, spec)
@@ -703,8 +795,23 @@ def generate_quant_commentary(
         earnings_data: dict,
     ) -> str:
     """
-    Calls the LLM to flag anomalies and generate plain English
-    interpretation of the quantitative outputs per ticker.
+    Calls the LLM to flag anomalies and interpret quantitative outputs per ticker.
+
+    Builds a structured metric summary for each ticker and passes it to
+    ANOMALY_PROMPT, which asks the LLM to flag R², GARCH persistence, PEG,
+    FCF, earnings quality, and debt-to-FCF signals.
+
+    Args:
+        tickers: List of ticker symbols to include in the commentary.
+        factor_results: Dict of factor model outputs keyed by ticker.
+        garch_results: Dict of GARCH outputs keyed by ticker.
+        valuation: Dict of valuation metrics keyed by ticker.
+        financial_health: Dict of financial health metrics keyed by ticker.
+        earnings_data: Dict of earnings history data keyed by ticker.
+
+    Returns:
+        Plain prose commentary, one paragraph per ticker labelled with the
+        ticker symbol. Returns a fallback string if the LLM call fails.
     """
     # Build a structured summary of all metrics per ticker
     data_lines = []
@@ -717,19 +824,19 @@ def generate_quant_commentary(
 
         data_lines.append(f"""{ticker}:
         Factor model: alpha={_fmt(fr.get('alpha_daily'), '.6f')}, \
-b_mkt={_fmt(fr.get('b_MKT'), '.3f')}, R²={_fmt(fr.get('r2'), '.3f')}, \
-p_val_alpha={_fmt(fr.get('p_val_alpha'), '.3f')}
+            b_mkt={_fmt(fr.get('b_MKT'), '.3f')}, R²={_fmt(fr.get('r2'), '.3f')}, \
+            p_val_alpha={_fmt(fr.get('p_val_alpha'), '.3f')}
         GARCH: persistence={_fmt(gr.get('garch_persist'), '.4f')}, \
-sigma_annual={_fmt(gr.get('sigma_total_annual'), '.2%')}, \
-vol_regime={gr.get('vol_regime', 'N/A')}
+            sigma_annual={_fmt(gr.get('sigma_total_annual'), '.2%')}, \
+            vol_regime={gr.get('vol_regime', 'N/A')}
         Valuation: fwd_pe={val.get('fwd_pe', 'N/A')}, \
-peg={val.get('peg', 'N/A')}, ev_ebitda={val.get('ev_ebitda', 'N/A')}
+            peg={val.get('peg', 'N/A')}, ev_ebitda={val.get('ev_ebitda', 'N/A')}
         Financial health: roic={_fmt(fh.get('roic'), '.4f')}, \
-fcf_margin={_fmt(fh.get('fcf_margin'), '.2%')}, \
-revenue_growth_1yr={_fmt(fh.get('revenue_growth_1yr'), '.2%')}, \
-earnings_quality={fh.get('earnings_quality', 'N/A')}
+            fcf_margin={_fmt(fh.get('fcf_margin'), '.2%')}, \
+            revenue_growth_1yr={_fmt(fh.get('revenue_growth_1yr'), '.2%')}, \
+            earnings_quality={fh.get('earnings_quality', 'N/A')}
         Earnings: avg_surprise={ed.get('avg_eps_surprise_pct', 'N/A')}%, \
-consecutive_beats={ed.get('consecutive_beats', 'N/A')}
+            consecutive_beats={ed.get('consecutive_beats', 'N/A')}
         """)
 
     prompt = ANOMALY_PROMPT.format(
@@ -751,11 +858,20 @@ consecutive_beats={ed.get('consecutive_beats', 'N/A')}
 
 def agent2_quant(state: PipelineState) -> dict:
     """
-    Agent 2 — Quant Analyst
+    Agent 2 — Quantitative Analysis.
 
-    Runs factor regression, GARCH, and all yfinance data fetching
-    per ticker. Produces mu_sigma for Agent 3 and the full
-    quantitative picture for Agent 4.
+    Downloads price history and Fama-French factors, fits a 3-factor OLS
+    regression and GARCH(1,1) per ticker to produce mu and sigma estimates.
+    Also fetches valuation metrics, financial health, and earnings data via
+    yfinance, then generates an LLM commentary on anomalous quantitative signals.
+
+    Args:
+        state: Pipeline state dict containing tickers, run_date, and errors.
+
+    Returns:
+        Partial state update dict with keys: factor_results, garch_results,
+        mu_sigma, valuation, financial_health, earnings_data, earnings_dates,
+        quant_commentary, errors.
     """
     print(f"\n  [Agent 2] Quant analyst running")
     tickers  = state["tickers"]

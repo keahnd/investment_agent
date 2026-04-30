@@ -63,7 +63,13 @@ GENERAL_DELAY   = 1.0
 def scrape_finviz(ticker: str) -> list[dict]:
     """
     Scrapes the news table from Finviz for a given ticker.
-    Returns a list of {date, time, source, headline} dicts.
+
+    Args:
+        ticker: Plain ticker symbol (e.g. 'AAPL', 'LMT').
+
+    Returns:
+        List of dicts with keys: date, time, source, headline, url, full_text.
+        Returns empty list on any request or parse failure.
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
 
@@ -125,8 +131,16 @@ def scrape_finviz(ticker: str) -> list[dict]:
 def scrape_seeking_alpha(ticker: str) -> list[dict]:
     """
     Fetches recent headlines from Seeking Alpha's internal API endpoint.
-    Falls back to empty list on any failure — SA is more aggressive about
-    bot detection than Finviz.
+
+    SA's /api/v3/ requires authentication cookies. Without them the data
+    array is empty. Falls back to empty list on any failure.
+
+    Args:
+        ticker: Plain ticker symbol (e.g. 'AAPL').
+
+    Returns:
+        List of dicts with keys: title, published, paywalled.
+        Returns empty list if unauthenticated or on request failure.
     """
     url = f"https://seekingalpha.com/api/v3/symbols/{ticker}/news"
     params = {"filter[until]": "", "filter[since]": "", "isMounting": "true"}
@@ -156,9 +170,14 @@ def scrape_seeking_alpha(ticker: str) -> list[dict]:
 
 def fetch_aaii_sentiment() -> dict:
     """
-    Scrapes the AAII weekly sentiment survey table.
-    Returns {bullish, bearish, neutral, bull_bear_spread} as strings.
-    Published every Thursday at aaii.com.
+    Scrapes the AAII weekly sentiment survey table from aaii.com.
+
+    Published every Thursday. Parses bullish/neutral/bearish percentages
+    and the bull-bear spread from the results table.
+
+    Returns:
+        Dict with keys: date, bullish, neutral, bearish, bull_bear_spread.
+        Returns {'error': <message>} on failure.
     """
     url = "https://www.aaii.com/sentimentsurvey/sent_results"
 
@@ -200,8 +219,11 @@ def fetch_aaii_sentiment() -> dict:
 
 def fetch_fear_greed() -> dict:
     """
-    Fetches the CNN Fear & Greed Index via their public data endpoint.
-    Returns {score, rating} where score is 0-100.
+    Fetches the CNN Fear & Greed Index from their public data endpoint.
+
+    Returns:
+        Dict with keys: score (0–100 float), rating (str, e.g. 'Fear').
+        Includes 'error' key on failure.
     """
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 
@@ -222,9 +244,17 @@ def fetch_fear_greed() -> dict:
 
 def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
     """
-    Given a YouTube channel URL (/@Handle or /channel/ID), fetches the channel's
-    /videos page and returns the URLs of the most recent n uploads.
-    Returns empty list on failure.
+    Resolves the most recent video URLs from a YouTube channel page.
+
+    Fetches the channel's /videos page and extracts video IDs from the
+    embedded JSON, deduplicating in order of appearance.
+
+    Args:
+        channel_url: YouTube channel URL in /@Handle or /channel/ID format.
+        n: Number of most recent videos to return. Defaults to 3.
+
+    Returns:
+        List of YouTube watch URLs (up to n). Returns empty list on failure.
     """
     videos_url = channel_url.rstrip("/") + "/videos"
     try:
@@ -238,8 +268,17 @@ def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
 
 def fetch_youtube_transcript(url: str, name: str) -> str:
     """
-    Fetches auto-captions for a YouTube video URL (watch?v=... or youtu.be/...).
-    Returns the full transcript as a single string, or empty string on failure.
+    Fetches the auto-generated captions for a YouTube video.
+
+    Handles both youtube.com/watch?v= and youtu.be/ URL formats.
+
+    Args:
+        url: Full YouTube video URL.
+        name: Human-readable label for the video or podcast, used in log output.
+
+    Returns:
+        Full transcript as a single whitespace-joined string. Returns empty
+        string if the video ID cannot be extracted or on any fetch failure.
     """
     # Extract video ID — handles both youtube.com/watch?v= and youtu.be/ formats
     match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
@@ -262,8 +301,17 @@ def fetch_youtube_transcript(url: str, name: str) -> str:
 
 def scrape_yahoo_finance(ticker: str) -> list[dict]:
     """
-    Fetches full article text from Yahoo Finance news for a ticker.
-    Yahoo Finance is free and aggregates from Reuters, AP, and others.
+    Fetches recent news items from the Yahoo Finance RSS headline feed.
+
+    Yahoo Finance aggregates from Reuters, AP, and others and is free to use.
+    Requires ticker.TO format for TSX-listed securities.
+
+    Args:
+        ticker: Ticker symbol as used by Yahoo Finance (e.g. 'AAPL', 'TD.TO').
+
+    Returns:
+        List of dicts with keys: title, url, published, snippet, full_text.
+        Capped at 10 most recent items. Returns empty list on failure.
     """
     url = f"https://finance.yahoo.com/rss/headline?s={ticker}"
     
@@ -298,8 +346,17 @@ def scrape_yahoo_finance(ticker: str) -> list[dict]:
 
 def scrape_etf_dot_com(ticker: str) -> list[dict]:
     """
-    Scrapes the ETF overview page on etf.com for the fund summary and
-    links to recent news articles. Returns list of {title, url, full_text} dicts.
+    Scrapes the ETF overview page on etf.com for fund summary and news links.
+
+    Extracts a fund description block (if present) as a pseudo-article, then
+    scrapes any news section anchor tags for additional items.
+
+    Args:
+        ticker: Plain ETF ticker symbol (e.g. 'ITA', 'NLR').
+
+    Returns:
+        List of dicts with keys: title, url, full_text.
+        Returns empty list on request failure.
     """
     url = f"https://www.etf.com/{ticker}"
     try:
@@ -335,9 +392,18 @@ def scrape_etf_dot_com(ticker: str) -> list[dict]:
 
 def scrape_globe_and_mail(ticker: str) -> list[dict]:
     """
-    Scrapes recent news from the Globe and Mail stock page for a TSX-listed ticker.
-    Appends '-T' per Globe and Mail's exchange suffix convention (e.g. TD → TD-T).
-    Returns list of {title, url, published, full_text} dicts.
+    Scrapes recent news from the Globe and Mail stock page for a TSX ticker.
+
+    Constructs the URL using Globe and Mail's exchange suffix convention
+    (ticker + '-T', e.g. TD → TD-T, BEP-UN → BEP-UN-T). Falls back to
+    scanning all article-like anchor tags if no <article> elements are found.
+
+    Args:
+        ticker: Plain TSX ticker symbol without exchange suffix (e.g. 'TD').
+
+    Returns:
+        List of dicts with keys: title, url, published, full_text.
+        Returns empty list on request failure.
     """
     gm_ticker = ticker + "-T"
     url = f"https://www.theglobeandmail.com/investing/markets/stocks/{gm_ticker}/"
@@ -381,9 +447,17 @@ def scrape_globe_and_mail(ticker: str) -> list[dict]:
 
 def fetch_article_text(url: str) -> str:
     """
-    Fetches the full text of a news article from its URL.
-    Extracts paragraph text, ignoring navigation and boilerplate.
-    Returns empty string on failure or if paywalled.
+    Fetches and extracts paragraph text from a news article URL.
+
+    Removes script, style, nav, header, footer, and aside tags before
+    extracting paragraphs. Treats content under 200 characters as paywalled.
+
+    Args:
+        url: Full URL of the news article to fetch.
+
+    Returns:
+        Extracted article text capped at 5000 characters. Returns empty
+        string on request failure or if content appears paywalled.
     """
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
@@ -411,9 +485,19 @@ def fetch_article_text(url: str) -> str:
 
 def filter_relevant_headlines(ticker: str, company_name: str, articles: list[dict], n: int = 5) -> list[dict]:
     """
-    Passes article headlines to a small LLM and returns the n most relevant
-    for the given ticker. articles must have a 'headline' or 'title' key and a 'url' key.
-    Falls back to first n articles if the LLM call fails.
+    Uses an LLM to select the n most relevant articles for a given ticker.
+
+    Passes headline text to the LLM and parses the returned comma-separated
+    index list. Falls back to the first n articles if the LLM call fails.
+
+    Args:
+        ticker: Ticker symbol used as context for relevance scoring.
+        company_name: Optional company name appended to the LLM prompt for context.
+        articles: List of article dicts, each must have a 'headline' or 'title' key.
+        n: Number of most relevant articles to return. Defaults to 5.
+
+    Returns:
+        Filtered list of up to n article dicts selected from the input list.
     """
     if not articles:
         return []
@@ -439,7 +523,20 @@ def filter_relevant_headlines(ticker: str, company_name: str, articles: list[dic
     
 def mention_is_relevant(ticker: str, mentions: list[str], company_name: str = "") -> list[str]:
     """
-    Checks if ticker mentions in podcast are actually about ticker or incorrect grabs
+    Filters podcast transcript excerpts to remove false positives for a ticker.
+
+    Some regex matches on ticker symbols or company names may not refer to the
+    company (e.g. 'uber' as an adjective vs. Uber Inc.). Uses an LLM to verify
+    each candidate excerpt.
+
+    Args:
+        ticker: Ticker symbol being searched for.
+        mentions: List of transcript excerpt strings flagged as potential mentions.
+        company_name: Optional company name for additional LLM context.
+
+    Returns:
+        Filtered list of excerpts genuinely discussing the ticker. Returns the
+        full mentions list unchanged if the LLM call fails.
     """
     if not mentions:
         return []
@@ -468,8 +565,22 @@ def mention_is_relevant(ticker: str, mentions: list[str], company_name: str = ""
 
 def extract_ticker_mentions(transcript: str, ticker: str, company_name: str = "", window: int = 600) -> str:
     """
-    Extracts text windows around each whole-word mention of a ticker or company name.
-    Uses regex word boundaries to avoid false positives (e.g. "ITA" inside "capital").
+    Extracts text windows around whole-word mentions of a ticker or company name.
+
+    Uses regex word boundaries to avoid false positives (e.g. 'ITA' inside
+    'capital'). Deduplicates overlapping windows and verifies results via
+    mention_is_relevant.
+
+    Args:
+        transcript: Full transcript text to search.
+        ticker: Ticker symbol to search for.
+        company_name: Optional company name; the first word (>3 chars) and full
+            name are also searched as additional terms.
+        window: Characters of context to include around each mention. Defaults to 600.
+
+    Returns:
+        Relevant excerpts joined by '\\n...\\n'. Returns empty string if no
+        relevant mentions are found.
     """
     terms = [re.escape(ticker)]
     if company_name:
@@ -500,8 +611,16 @@ def extract_ticker_mentions(transcript: str, ticker: str, company_name: str = ""
 # FILE I/O HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def write_raw(raw_dir: Path, label: str, source: str, text: str):
-    """Writes raw scraped text to a dated file. Never overwrites."""
+def write_raw(raw_dir: Path, label: str, source: str, text: str) -> None:
+    """
+    Writes raw scraped text to a labelled source file in the run's raw directory.
+
+    Args:
+        raw_dir: Base raw output directory for the current run.
+        label: Subdirectory name, typically the ticker symbol.
+        source: Source identifier used as the filename stem (e.g. 'finviz', 'yahoofinance').
+        text: Raw text content to write.
+    """
     filename = f"{source}.txt"
     ticker_dir = raw_dir / label
     ticker_dir.mkdir(parents=True, exist_ok=True)
@@ -509,8 +628,15 @@ def write_raw(raw_dir: Path, label: str, source: str, text: str):
     filepath.write_text(text, encoding="utf-8")
 
 
-def write_summary(summary_dir: Path, ticker: str, text: str):
-    """Writes a summary paragraph to a dated file."""
+def write_summary(summary_dir: Path, ticker: str, text: str) -> None:
+    """
+    Writes an LLM-generated summary to the run's summaries directory.
+
+    Args:
+        summary_dir: Summary output directory for the current run.
+        ticker: Ticker symbol used as the filename stem.
+        text: Summary text to write.
+    """
     filename = f"{ticker}_summary.txt"
     filepath = summary_dir / filename
     filepath.write_text(text, encoding="utf-8")
@@ -547,9 +673,19 @@ name the catalysts, name the figures cited, name the risks."""
 
 def summarise_ticker_text(ticker: str, text: str) -> str:
     """
-    Calls the LLM to produce a 3-5 sentence summary of all collected
-    text for a ticker. Returns a fallback string if text is empty or
-    the LLM call fails.
+    Calls the LLM to summarise all collected news text for a ticker.
+
+    Truncates input to 8000 characters before sending to stay within model
+    context limits. Uses the SUMMARISE_PROMPT template.
+
+    Args:
+        ticker: Ticker symbol, used for prompt context and in fallback messages.
+        text: Combined raw text from all scraped sources for this ticker.
+
+    Returns:
+        4–6 sentence plain prose summary covering sentiment, catalysts, analyst
+        targets, and risks. Returns a fallback string if text is empty or the
+        LLM call fails.
     """
     if not text.strip():
         return f"No data collected for {ticker} this week."
@@ -578,13 +714,21 @@ def summarise_ticker_text(ticker: str, text: str) -> str:
 
 def agent1_sentiment(state: PipelineState) -> dict:
     """
-    Agent 1 — Sentiment Analysis
+    Agent 1 — Sentiment Analysis.
 
-    Runs all scrapers, stores raw text to disk, produces per-ticker
-    summaries via LLM, fetches macro sentiment indicators and earnings dates.
+    Routes each ticker to appropriate news scrapers based on exchange and security
+    type (US stock → Finviz + Seeking Alpha + Yahoo Finance; US ETF → etf.com +
+    Yahoo Finance; TSX → Globe and Mail + Yahoo Finance). Fetches macro sentiment
+    indicators (AAII, Fear & Greed) and podcast transcripts, then summarises all
+    collected text via LLM.
 
-    Returns state updates for: raw_text, summaries, aaii_sentiment,
-    fear_greed, earnings_dates, errors.
+    Args:
+        state: Pipeline state dict containing user_name, user_path, tickers,
+            run_date, and errors.
+
+    Returns:
+        Partial state update dict with keys: raw_text, summaries,
+        aaii_sentiment, fear_greed, errors.
     """
     user_name = state["user_name"]
     user_path = Path(state["user_path"])
