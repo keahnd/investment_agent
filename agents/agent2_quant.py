@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 import yfinance as yf
 from arch import arch_model
 from curl_cffi import requests
+from dotenv import load_dotenv
 
 from agents.state import PipelineState
 from agents.llm import get_llm
@@ -45,7 +46,6 @@ os.makedirs(os.path.dirname(FF_CACHE_FILE), exist_ok=True)
 VAL_CACHE_FILE = "cache/valuation_cache.json"
 os.makedirs(os.path.dirname(VAL_CACHE_FILE), exist_ok=True)
 HISTORY_YEARS = 5
-INFLATION_RATE = 0.025
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -263,7 +263,7 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
     }
 
 
-def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, HML: np.ndarray, rf_ann: float, cape: float, file: io.IOBase | None = None) -> dict:
+def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, HML: np.ndarray, rf_ann: float, cape: float, real_rf: float, file: io.IOBase | None = None) -> dict:
     """
     Fits a Fama-French 3-factor OLS regression on daily excess returns.
 
@@ -277,7 +277,9 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
         SMB: Daily SMB factor array.
         HML: Daily HML factor array.
         rf_ann: Annualised risk-free rate (mean of daily RF * 252).
-        cape: Current Shiller CAPE ratio, used to blend a forward-looking ERP.
+        cape: Current Shiller CAPE ratio, used to compute the CAPE-based ERP.
+        real_rf: 10-year TIPS real yield used as the real risk-free rate in the
+            CAPE ERP formula. Replaces the nominal rf minus inflation approximation.
         file: Optional file object to redirect printed diagnostics. Defaults to stdout.
 
     Returns:
@@ -325,9 +327,9 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
     
     historical_erp = factor_annual_means[0]
     cape_weight = 0.6           # TUNABLE PARAM
-    cape_erp = max(0.0, (1 / cape) - (rf_ann - INFLATION_RATE))        # HARCODED INFLATION
+    cape_erp = max(0.0, (1 / cape) - real_rf)
     blended_erp = cape_weight * cape_erp + (1 - cape_weight) * historical_erp
-    
+
     mu_annual = (
         rf_ann
         + alpha_daily * 252
@@ -335,7 +337,13 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
         + b_SMB * factor_annual_means[1]
         + b_HML * factor_annual_means[2]
     )
-    print(f"\n  Estimated annualised mu  : {mu_annual:.2%}", file=file)
+
+    print(f"\n  Real risk-free (TIPS)        : {real_rf:.2%}", file=file)
+    print(f"  CAPE earnings yield (1/CAPE) : {1/cape:.2%}", file=file)
+    print(f"  CAPE ERP                     : {cape_erp:.2%}", file=file)
+    print(f"  Historical ERP (5yr MKT avg) : {historical_erp:.2%}", file=file)
+    print(f"  Blended ERP (w={cape_weight:.0%} CAPE)   : {blended_erp:.2%}", file=file)
+    print(f"  Estimated annualised mu      : {mu_annual:.2%}", file=file)
 
     return {
         "alpha_daily": alpha_daily,
@@ -659,6 +667,46 @@ def fetch_cape() -> float:
         return 25.0
 
 
+def fetch_real_rf() -> float:
+    """
+    Fetches the 10-year TIPS real yield from FRED (series DFII10).
+
+    The TIPS real yield is the market-implied real risk-free rate, derived from
+    the spread between 10-year nominal Treasuries and inflation-protected bonds.
+    Using it directly in the CAPE ERP formula eliminates the need to assume an
+    inflation rate. Requires the FRED_API_KEY environment variable.
+
+    Returns:
+        10-year TIPS real yield as a decimal (e.g. 0.02 for 2.0%).
+        Falls back to 0.02 (2%) if the key is missing or request fails.
+    """
+    api_key = os.getenv("FRED_API_KEY")
+    if not api_key:
+        print("  [Real RF] FRED_API_KEY not set. Using fallback of 2%")
+        return 0.02
+
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id":  "DFII10",
+        "api_key":    api_key,
+        "file_type":  "json",
+        "sort_order": "desc",
+        "limit":      5,        # grab a few to skip weekends/holidays with missing data
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        for obs in response.json()["observations"]:
+            if obs["value"] != ".":
+                real_rf = float(obs["value"]) / 100
+                print(f"  [Real RF] TIPS 10yr real yield ({obs['date']}): {real_rf:.2%}")
+                return real_rf
+        raise ValueError("No valid DFII10 observations in response")
+    except Exception as e:
+        print(f"  [Real RF] FRED fetch failed ({e}). Using fallback of 2%")
+        return 0.02
+
+
 def fetch_earnings_data(ticker: str) -> dict:
     """
     Fetches earnings history and upcoming estimate data via yfinance.
@@ -920,17 +968,18 @@ def agent2_quant(state: PipelineState) -> dict:
         errors.append(f"Factor history download failed: {e}")
         print(f"    [error] Factor download failed: {e}")
     
-    # Fetch Market CAPE
-    cape = fetch_cape()
-    
+    # Fetch market-level inputs (once, shared across all tickers)
+    cape    = fetch_cape()
+    real_rf = fetch_real_rf()
+
     for ticker in tickers:
         fm = None
         g = None
-        
+
         if factors_available:
             try:
                 ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors)
-                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], cape)
+                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], cape, real_rf)
                 factor_results[ticker] = {
                     k: v for k, v in fm.items()
                     if k not in ("residuals", "Y_hat")
