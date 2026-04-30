@@ -601,10 +601,11 @@ def agent1_sentiment(state: PipelineState) -> dict:
     raw_dir.mkdir(parents=True, exist_ok=True)
     summary_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build ticker metadata from portfolio CSV
+    # Build ticker metadata from portfolio CSV.
+    # Keyed by base symbol (no .TO) since the CSV stores plain symbols.
+    # Use base_ticker = ticker.removesuffix(".TO") to look up in the loop.
     company_names: dict[str, str] = {}
-    yf_symbols:    dict[str, str] = {}   # ticker → yfinance/Yahoo Finance symbol (.TO for TSX)
-    ticker_meta:   dict[str, dict] = {}  # ticker → {exchange, is_etf, is_tsx}
+    ticker_meta:   dict[str, dict] = {}
     portfolio_path = user_path / "portfolio.csv"
     if portfolio_path.exists():
         port_df = pd.read_csv(portfolio_path)
@@ -613,7 +614,6 @@ def agent1_sentiment(state: PipelineState) -> dict:
             exchange = str(row.get("Exchange", "")).strip()
             sec_type = str(row.get("Security Type", "EQUITY")).strip()
             company_names[sym] = str(row.get("Name", ""))
-            yf_symbols[sym]    = sym + ".TO" if exchange == "TSX" else sym
             ticker_meta[sym]   = {
                 "exchange": exchange,
                 "is_etf":   "ETF" in sec_type.upper(),
@@ -633,16 +633,18 @@ def agent1_sentiment(state: PipelineState) -> dict:
     ticker_text = {t: [] for t in tickers}   # accumulates all text per ticker
 
     for ticker in tickers:
+        # ticker is the yfinance symbol (e.g. "TD.TO", "AAPL")
+        # base_ticker strips .TO for scrapers, file paths, and transcript search
+        base_ticker = ticker.removesuffix(".TO")
         print(f"\n    Scraping {ticker}...")
-        meta   = ticker_meta.get(ticker, {"exchange": "", "is_etf": False, "is_tsx": False})
+        meta   = ticker_meta.get(base_ticker, {"exchange": "", "is_etf": False, "is_tsx": False})
         is_tsx = meta["is_tsx"]
         is_etf = meta["is_etf"]
-        cname  = company_names.get(ticker, "")
-        yf_sym = yf_symbols.get(ticker, ticker)
+        cname  = company_names.get(base_ticker, "")
 
         if is_tsx:
             # ── Canadian stock or ETF → Globe and Mail ────────────────────
-            gm_results = scrape_globe_and_mail(ticker)
+            gm_results = scrape_globe_and_mail(base_ticker)
             if gm_results:
                 gm_results = filter_relevant_headlines(ticker, cname, gm_results)
                 for r in gm_results:
@@ -652,7 +654,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                     f"{r.get('published', '')} {r['title']}\n{r['full_text']}"
                     for r in gm_results
                 )
-                write_raw(raw_dir, ticker, "globeandmail", gm_text)
+                write_raw(raw_dir, base_ticker, "globeandmail", gm_text)
                 ticker_text[ticker].append(f"=== Globe and Mail Articles ===\n{gm_text}")
                 print(f"    [ok]   Globe and Mail: {len(gm_results)} relevant articles")
             else:
@@ -661,7 +663,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
 
         elif is_etf:
             # ── US ETF → etf.com ──────────────────────────────────────────
-            etf_results = scrape_etf_dot_com(ticker)
+            etf_results = scrape_etf_dot_com(base_ticker)
             if etf_results:
                 etf_results = filter_relevant_headlines(ticker, cname, etf_results)
                 for r in etf_results:
@@ -672,7 +674,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                     f"{r['title']}\n{r['full_text']}"
                     for r in etf_results
                 )
-                write_raw(raw_dir, ticker, "etf_dot_com", etf_text)
+                write_raw(raw_dir, base_ticker, "etf_dot_com", etf_text)
                 ticker_text[ticker].append(f"=== ETF.com ===\n{etf_text}")
                 print(f"    [ok]   etf.com: {len(etf_results)} relevant articles")
             else:
@@ -681,7 +683,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
 
         else:
             # ── US Stock → Finviz + Seeking Alpha ─────────────────────────
-            finviz_results = scrape_finviz(ticker)
+            finviz_results = scrape_finviz(base_ticker)
             if finviz_results:
                 finviz_results = filter_relevant_headlines(ticker, cname, finviz_results)
                 for r in finviz_results:
@@ -691,29 +693,29 @@ def agent1_sentiment(state: PipelineState) -> dict:
                     f"{r['date']} {r['time']} [{r['source']}] {r['headline']}\n{r['full_text']}"
                     for r in finviz_results
                 )
-                write_raw(raw_dir, ticker, "finviz", finviz_text)
+                write_raw(raw_dir, base_ticker, "finviz", finviz_text)
                 ticker_text[ticker].append(f"=== Finviz Articles ===\n{finviz_text}")
                 print(f"    [ok]   Finviz: {len(finviz_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: Finviz returned no results")
             time.sleep(FINVIZ_DELAY)
 
-            sa_results = scrape_seeking_alpha(ticker)
+            sa_results = scrape_seeking_alpha(base_ticker)
             if sa_results:
                 sa_text = "\n".join(
                     f"{r['published']} {r['title']}"
                     + (" [paywalled]" if r["paywalled"] else "")
                     for r in sa_results
                 )
-                write_raw(raw_dir, ticker, "seekingalpha", sa_text)
+                write_raw(raw_dir, base_ticker, "seekingalpha", sa_text)
                 ticker_text[ticker].append(f"=== Seeking Alpha Headlines ===\n{sa_text}")
                 print(f"    [ok]   Seeking Alpha: {len(sa_results)} headlines")
             else:
                 errors.append(f"{ticker}: Seeking Alpha returned no results")
             time.sleep(SEEKALPHA_DELAY)
 
-        # ── Yahoo Finance — all tickers, .TO suffix for TSX ───────────────
-        yf_results = scrape_yahoo_finance(yf_sym)
+        # ── Yahoo Finance — all tickers; ticker already has .TO for TSX ──
+        yf_results = scrape_yahoo_finance(ticker)
         if yf_results:
             yf_results = filter_relevant_headlines(ticker, cname, yf_results)
             for r in yf_results:
@@ -723,9 +725,9 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 f"{r['published']} {r['title']} [{r['snippet']}]\n{r['full_text']}"
                 for r in yf_results
             )
-            write_raw(raw_dir, ticker, "yahoofinance", yf_text)
+            write_raw(raw_dir, base_ticker, "yahoofinance", yf_text)
             ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
-            print(f"    [ok]   Yahoo Finance ({yf_sym}): {len(yf_results)} relevant articles")
+            print(f"    [ok]   Yahoo Finance ({ticker}): {len(yf_results)} relevant articles")
         else:
             errors.append(f"{ticker}: Yahoo Finance returned no results")
 
@@ -766,7 +768,8 @@ def agent1_sentiment(state: PipelineState) -> dict:
             if transcript:
                 podcast_raw_sections = []
                 for ticker in tickers:
-                    mentions = extract_ticker_mentions(transcript, ticker, company_name=company_names.get(ticker, ""))
+                    base_ticker = ticker.removesuffix(".TO")
+                    mentions = extract_ticker_mentions(transcript, base_ticker, company_name=company_names.get(base_ticker, ""))
                     if mentions:
                         label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
                         ticker_text[ticker].append(f"{label}\n{mentions}")
@@ -791,7 +794,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
 
         summary = summarise_ticker_text(ticker, combined)
         summaries[ticker] = summary
-        write_summary(summary_dir, ticker, summary)
+        write_summary(summary_dir, ticker.removesuffix(".TO"), summary)
         print(f"    [ok]   {ticker}: summary written ({len(summary)} chars)")
 
     print(f"\n  [Agent 1] Complete. Errors: {len(errors)}")

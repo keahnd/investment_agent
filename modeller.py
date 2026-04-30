@@ -351,7 +351,7 @@ def run_factor_models(excess_ret, MKT, SMB, HML, rf_ann, cape, file=None):
         "residuals": residuals,
         "r_squared": R2,
         "Y_hat": Y_hat,
-        "p_val": p_vals[i]
+        "p_val": p_vals[0]
     }
 
 
