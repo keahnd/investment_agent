@@ -21,14 +21,16 @@ class PipelineState(TypedDict):
     summaries:       Optional[dict]  # {ticker: summary paragraph}
     aaii_sentiment:  Optional[dict]  # {bullish, bearish, neutral}
     fear_greed:      Optional[dict]  # {score, rating}
-    earnings_dates:  Optional[dict]  # {ticker: next_earnings_date}
-    earnings_data:   Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
 
     # ── Agent 2 outputs ──────────────────────────────────────────
-    factor_results:    Optional[dict]  # {ticker: {betas, alpha, R2}}
-    garch_results:     Optional[dict]  # {ticker: {omega, alpha, beta, sigma}}
+    factor_results:    Optional[dict]  # {ticker: {alpha, b_mkt, b_smb, b_hml, r2, r2_adj, p_vals}}
+    garch_results:     Optional[dict]  # {ticker: {omega, alpha, beta, persist, long_run_vol, sigma_current}}
+    mu_sigma:          Optional[dict]  # {ticker: {mu_annual, sigma_annual}}
     valuation:         Optional[dict]  # {ticker: {fwd_pe, ttm_pe, peg, ev_ebitda}}
-    quant_commentary:  Optional[str]
+    financial_health:  Optional[dict]  # {ticker: {revenue_growth, fcf_margin, roic, ...}}
+    earnings_data:     Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
+    earnings_dates:    Optional[dict]  # {ticker: next_earnings_date}
+    quant_commentary:  Optional[str]   # LLM anomaly flags and interpretation
 
     # ── Agent 3 outputs ──────────────────────────────────────────
     mc_current:       Optional[dict]  # Monte Carlo stats for current weights

@@ -17,7 +17,11 @@ def load_tickers(user_path: Path) -> list[str]:
 	with open(user_path / "portfolio.csv", newline="") as f:
 		reader = csv.DictReader(f)
 		for row in reader:
-			tickers.append(row["Symbol"].strip().upper())
+			sym      = row["Symbol"].strip().upper()
+			exchange = row.get("Exchange", "").strip()
+			if exchange == "TSX":
+				sym += ".TO"
+			tickers.append(sym)
 	return tickers
 
 
@@ -41,12 +45,14 @@ def run_user(user_path: Path) -> None:
 		"summaries":            None,
 		"aaii_sentiment":       None,
 		"fear_greed":           None,
-		"earnings_dates":       None,
-		"earnings_data":	    None,
-		"factor_results":       None,
-		"garch_results":        None,
-		"valuation":            None,
-		"quant_commentary":     None,
+		"factor_results":    	None,
+		"garch_results":     	None,
+		"mu_sigma":          	None,
+		"valuation":         	None,
+		"financial_health":  	None,
+		"earnings_data":     	None,
+		"earnings_dates":    	None,
+		"quant_commentary":  	None,
 		"mc_current":           None,
 		"mc_rebalanced":        None,
 		"risk_commentary":      None,
