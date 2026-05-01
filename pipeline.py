@@ -50,12 +50,11 @@ def load_tickers(user_path: Path, usd_cad_rate: float) -> list[str]:
 			if currency == "USD":
 				market_value = market_value * usd_cad_rate
 
-			tickers.append(ticker)
-			rows.append((ticker, market_value))
+			rows.append((sym, market_value))
 			total_value_cad += market_value
 
-	for ticker, market_value in rows:
-		weights[ticker] = round(market_value / total_value_cad, 6)
+	for sym, market_value in rows:
+		weights[sym] = round(market_value / total_value_cad, 6)
 
 	return tickers, weights, total_value_cad
 

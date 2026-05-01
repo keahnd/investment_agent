@@ -841,6 +841,7 @@ def generate_quant_commentary(
         valuation: dict,
         financial_health: dict,
         earnings_data: dict,
+        file = None,
     ) -> str:
     """
     Calls the LLM to flag anomalies and interpret quantitative outputs per ticker.
@@ -898,6 +899,7 @@ def generate_quant_commentary(
     try:
         llm      = get_llm()
         response = llm.invoke(prompt)
+        print(f"\n LLM Commentary:{response.content.strip()}", file=file)
         return response.content.strip()
     except Exception as e:
         print(f"    [warn] LLM commentary failed: {e}")
@@ -1038,6 +1040,9 @@ def agent2_quant(state: PipelineState) -> dict:
             valuation[ticker] = {}
             
         try:
+            # if ticker_info.get(ticker, {}).get("type") == "etf":
+            #     earnings_data[ticker] = {"next_earnings_date": None, "recent_quarters": [], ...}
+            # else:
             earnings = fetch_earnings_data(ticker)
             earnings_data[ticker] = earnings
             earnings_dates[ticker] = earnings.get("next_earnings_date")
@@ -1051,14 +1056,16 @@ def agent2_quant(state: PipelineState) -> dict:
     # ── LLM anomaly commentary ────────────────────────────────────────────────
     print(f"\n    Generating quantitative commentary...")
     try:
-        quant_commentary = generate_quant_commentary(
-            tickers,
-            factor_results,
-            garch_results,
-            valuation,
-            financial_health,
-            earnings_data,
-        )
+        with open(raw_dir / "llm_quant.txt", "w", encoding="utf-8") as quant_file:
+            quant_commentary = generate_quant_commentary(
+                tickers,
+                factor_results,
+                garch_results,
+                valuation,
+                financial_health,
+                earnings_data,
+                quant_file
+            )
     except Exception as e:
             errors.append(f"Quant Commentary Failed: {e}")
             quant_commentary = None

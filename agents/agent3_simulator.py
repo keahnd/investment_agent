@@ -209,7 +209,8 @@ def generate_sim_commentary(
         mc_tickers: dict,
         mc_curr_port: dict,
         mc_rebal_port: dict,
-        fallback_present: dict
+        fallback_present: dict,
+        file = None
     ) -> str:
     """
     Calls the LLM to interpret simulation outputs per ticker/portfolio.
@@ -274,6 +275,7 @@ def generate_sim_commentary(
     try:
         llm      = get_llm()
         response = llm.invoke(prompt)
+        print(f"\n LLM Commentary:{response.content.strip()}", file=file)
         return response.content.strip()
     except Exception as e:
         print(f"    [warn] LLM commentary failed: {e}")
@@ -338,7 +340,8 @@ def agent3_simulator(state: PipelineState) -> dict:
     
     
     try:
-        sim_commentary = generate_sim_commentary(tickers, strategies, mc_current, mc_port_current, mc_port_rebalanced, fallback_present)
+        with open(port_raw_dir / "llm_commentary.txt", "w", encoding="utf-8") as f:
+            sim_commentary = generate_sim_commentary(tickers, strategies, mc_current, mc_port_current, mc_port_rebalanced, fallback_present)
     except Exception as e:
             errors.append(f"Sim Commentary Failed: {e}")
             sim_commentary = None
