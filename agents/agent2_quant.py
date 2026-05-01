@@ -977,36 +977,37 @@ def agent2_quant(state: PipelineState) -> dict:
     cape    = fetch_cape()
     real_rf = fetch_real_rf()
 
+    raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
     for ticker in tickers:
         fm = None
         g = None
 
-        if factors_available:
-            try:
-                ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors)
-                fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], cape, real_rf)
-                factor_results[ticker] = {
-                    k: v for k, v in fm.items()
-                    if k not in ("residuals", "Y_hat")
-                    # exclude numpy arrays from the state dict —
-                    # they're passed directly to GARCH below
-                }
-            except Exception as e:
-                errors.append(f"{ticker}: Failed to run factor analysis: {e}")
-                factor_results[ticker] = {}
-            
-            if fm is not None:  
+        (raw_dir / ticker).mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / ticker / "quant.txt", "w", encoding="utf-8") as quant_file:
+            if factors_available:
                 try:
-                    g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"])
-                    garch_results[ticker] = {
-                        k: v for k, v in g.items()
-                        if k not in ("h_garch", "pvalues")
-                        # exclude full variance series from state —
-                        # too large and not needed downstream
+                    ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors, file=quant_file)
+                    fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], cape, real_rf, file=quant_file)
+                    factor_results[ticker] = {
+                        k: v for k, v in fm.items()
+                        if k not in ("residuals", "Y_hat")
                     }
                 except Exception as e:
-                    errors.append(f"{ticker}: Failed to run garch analysis: {e}")
-                    garch_results[ticker] = {}
+                    errors.append(f"{ticker}: Failed to run factor analysis: {e}")
+                    factor_results[ticker] = {}
+
+                if fm is not None:
+                    try:
+                        g = run_garch(fm["residuals"], ret["factor_vols"], fm["b_MKT"], fm["b_SMB"], fm["b_HML"], file=quant_file)
+                        garch_results[ticker] = {
+                            k: v for k, v in g.items()
+                            if k not in ("h_garch", "pvalues")
+                        }
+                    except Exception as e:
+                        errors.append(f"{ticker}: Failed to run garch analysis: {e}")
+                        garch_results[ticker] = {}
             
         if fm and g:
             mu_sigma[ticker] = {

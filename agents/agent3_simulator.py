@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from pathlib import Path
 
 from agents.state import PipelineState
 from agents.llm import get_llm
@@ -306,24 +307,34 @@ def agent3_simulator(state: PipelineState) -> dict:
     port_info = state["mu_sigma"]
     mu_vec = np.array([port_info[t]["mu_annual"] for t in tickers])
     fallback_present = {t: port_info[t]["is_fallback"] for t in tickers}
-    
-    
+
+    raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
+
     mc_current = {}
     mc_port_current = {}
     mc_port_rebalanced = {}
-    
+
     for ticker in tickers:
         print(f"\nMonte Carlo Sim: Ticker ({ticker})")
         state_info = port_info[ticker]
-        mc_current[ticker] = run_monte_carlo(state_info["mu_annual"], state_info["sigma_annual"], state_info["s_current"])
-        
+        (raw_dir / ticker).mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / ticker / "mc_sim.txt", "w", encoding="utf-8") as f:
+            mc_current[ticker] = run_monte_carlo(
+                state_info["mu_annual"], state_info["sigma_annual"], state_info["s_current"], file=f
+            )
+
+    port_raw_dir = raw_dir / "_portfolio"
+    port_raw_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"\nMonte Carlo Sim: current weights")
-    mc_port_current = port_monte_carlo(mu_vec, Sigma, total_value, curr_weights)
-    
+    with open(port_raw_dir / "mc_current.txt", "w", encoding="utf-8") as f:
+        mc_port_current = port_monte_carlo(mu_vec, Sigma, total_value, curr_weights, file=f)
+
     for strategy in strategies:
         print(f"\nMonte Carlo Sim: Rebalanced ({strategy})")
         weights = get_rebalanced_weights(tickers)
-        mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights)
+        with open(port_raw_dir / f"mc_{strategy}.txt", "w", encoding="utf-8") as f:
+            mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights, file=f)
     
     
     try:
