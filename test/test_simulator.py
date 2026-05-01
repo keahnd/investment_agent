@@ -4,10 +4,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agents.agent3_simulator import (
+from agents.agent4_simulator import (
     run_monte_carlo,
     port_monte_carlo,
-    agent3_simulator
+    agent4_simulator
 )
 
 # Test 1 - Per-Ticker MC
@@ -20,7 +20,7 @@ from agents.agent3_simulator import (
 # results = port_monte_carlo(np.array([0.1, 0.2]), np.array([[0.2, 0.12], [0.12, 0.1]]), 100, [0.6, 0.4])
 # print(f"{results}")
 
-# Minimal state with only what Agent 3 needs
+# Minimal state with only what Agent 4 needs
 test_state = {
     "user_name":  "test_user",
     "user_path":  "users/test_user",
@@ -32,7 +32,7 @@ test_state = {
     "strategies":		["equal_weight"],
     "errors":     [],
 
-    # Agent 1 and 2 outputs — Agent 3 doesn't read these
+    # Agent 1 and 2 outputs — Agent 4 doesn't read these
     # but they need to exist in state as None
     "raw_text":         None,
     "summaries":        None,
@@ -56,14 +56,14 @@ test_state = {
     },
     "quant_commentary": None,
     
-    # Agent 3 outputs — all None at start
+    # Agent 4 outputs — all None at start
     "mc_current":     None,
     "mc_port_current": None,
     "mc_port_rebalanced":  None,
     "sim_commentary":      None,
 }
 
-result = agent3_simulator(test_state)
+result = agent4_simulator(test_state)
 
 # Inspect outputs
 print("\n=== mc_current ===")

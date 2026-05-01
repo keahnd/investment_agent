@@ -7,8 +7,26 @@ from agents.state import PipelineState
 from agents.llm import get_llm
 
 
-def _fmt(val: float | None, spec: str) -> str:
-    return format(val, spec) if val is not None else "N/A"
+def get_mu_for_tickers(tickers: list, state: PipelineState) -> list:
+    """
+    Uses BL posterior mu if available, falls back to factor model mu.
+    Sigma always comes from GARCH via mu_sigma regardless.
+    
+    Args:
+        tickers: list of tickers in portfolio
+        state: pipeline state object
+        
+    Returns:
+        list of returns for each ticker
+    """
+    returns = []
+    posterior = state.get("posterior_mu") or {}
+    
+    for ticker in tickers:
+        if ticker in posterior:
+            returns.append(posterior[ticker])
+        else:
+            return returns.append(state["mu_sigma"][ticker]["mu_annual"])
 
 
 def run_monte_carlo(mu: float, sigma: float, S0: float, file=None):
@@ -182,6 +200,9 @@ def get_rebalanced_weights(tickers):
     return [1/len(tickers)] * len(tickers)
 
 
+def _fmt(val: float | None, spec: str) -> str:
+    return format(val, spec) if val is not None else "N/A"
+
 # LLM SIM SUMMARY
 ANOMALY_PROMPT = """You are a quantitative analyst reviewing simulation outputs for a portfolio.
 
@@ -283,9 +304,9 @@ def generate_sim_commentary(
     
 
 
-def agent3_simulator(state: PipelineState) -> dict:
+def agent4_simulator(state: PipelineState) -> dict:
     """
-    Agent 3 — Monte Carlo Simulator
+    Agent 4 — Monte Carlo Simulator
     Runs Monte Carlo simulations for current and candidate rebalanced portfolios.
     Uses mu and sigma estimates from agent 2
 
@@ -295,7 +316,7 @@ def agent3_simulator(state: PipelineState) -> dict:
     Returns:
         Partial state update dict with keys: mc_current, mc_rebalanced, risk_commentary, errors.
     """
-    print(f"  [Agent 3] Simulator running")
+    print(f"  [Agent 4] Simulator running")
     tickers  = state["tickers"]
     print(f"            Tickers : {tickers}")
     errors   = list(state.get("errors") or [])
@@ -307,7 +328,7 @@ def agent3_simulator(state: PipelineState) -> dict:
     total_value = state["total_portfolio_value"]
     strategies = state["strategies"]
     port_info = state["mu_sigma"]
-    mu_vec = np.array([port_info[t]["mu_annual"] for t in tickers])
+    mu_vec = get_mu_for_tickers(tickers, state)
     fallback_present = {t: port_info[t]["is_fallback"] for t in tickers}
 
     raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
@@ -346,7 +367,7 @@ def agent3_simulator(state: PipelineState) -> dict:
             errors.append(f"Sim Commentary Failed: {e}")
             sim_commentary = None
             
-    print(f"\n  [Agent 3] Complete. New Errors: {len(errors) - existing_errors}")
+    print(f"\n  [Agent 4] Complete. New Errors: {len(errors) - existing_errors}")
 
     return {
         "mc_current":     mc_current,

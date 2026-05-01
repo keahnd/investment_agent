@@ -2,7 +2,7 @@
 Agent 1 — Sentiment Analysis
 =========================
 Scrapes financial news, sentiment surveys, and podcast transcripts.
-Produces per-ticker text summaries for Agent 4's Black-Litterman
+Produces per-ticker text summaries for Agent 3's Black-Litterman
 view generation.
 
 Sources:
@@ -932,7 +932,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
 
     for ticker in tickers:
         # Only news text goes to the LLM — AAII, Fear & Greed, and
-        # earnings dates are structured signals that Agent 4 reads directly
+        # earnings dates are structured signals that Agent 3 reads directly
         combined = "\n\n".join(ticker_text[ticker])
         raw_text_out[ticker] = combined
 

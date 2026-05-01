@@ -4,15 +4,16 @@ Agent 2 — Quantitative Analysis
 Runs all quantitative analysis per ticker:
   - Fama-French 3-factor OLS regression  → alpha, betas, R²
   - GARCH(1,1) volatility estimation     → time-varying sigma
-  - mu and sigma per ticker              → Agent 3 inputs
+  - mu and sigma per ticker              → Agent 4 inputs
   - Valuation metrics                    → P/E, PEG, EV/EBITDA
   - Financial health                     → FCF, ROIC, margins
   - Earnings data                        → beat/miss history
   - Earnings dates                       → next report date
   - Ticker classification                → ETF / US stock / CA stock
 
-All yfinance calls live here. Agent 3 reads mu_sigma for simulation inputs.
-Agent 4 reads everything for BL view formation and optimisation..
+All yfinance calls live here. Agent 3 reads everything for BL view formation and optimisation..
+Agent 4 reads mu_sigma for simulation inputs.
+
 """
 
 import os
@@ -961,7 +962,7 @@ def agent2_quant(state: PipelineState) -> dict:
             "errors":           errors,
         }
     
-    # Build Covariance Matrix for agent 3
+    # Build Covariance Matrix for agent 4
     returns_df = np.log(raw_prices / raw_prices.shift(1)).dropna()
     cov_matrix = returns_df[tickers].cov().to_dict()  # serialisable as nested dict
     

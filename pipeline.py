@@ -93,13 +93,14 @@ def run_user(user_path: Path) -> None:
 		"earnings_data":     	None,
 		"earnings_dates":    	None,
 		"quant_commentary":  	None,
-		"mc_current":           None,
-		"mc_rebalanced":        None,
-		"sim_commentary":      None,
 		"bl_views":             None,
 		"recommended_weights":  None,
 		"recommendation_table": None,
 		"advisory_commentary":  None,
+		"mc_current":           None,
+		"mc_port_current":		None,
+		"mc_rebalanced":        None,
+		"sim_commentary":       None,
 		"errors":               [],
 		"report_path":          None,
 		"email_sent":           None,
@@ -108,7 +109,7 @@ def run_user(user_path: Path) -> None:
 	final_state = pipeline_graph.invoke(initial_state)
 	print(f"\n  Keys in final state: {list(final_state.keys())}")
 	print(f"  Agent 1 summaries populated: {final_state['summaries'] is not None}")
-	print(f"  Agent 4 commentary populated: {final_state['advisory_commentary'] is not None}")
+	print(f"  Agent 3 commentary populated: {final_state['advisory_commentary'] is not None}")
 
     # Print results
 	print(f"\n  Done. Errors: {final_state['errors']}")

@@ -1,13 +1,13 @@
 from agents.state import PipelineState
 
 
-def agent4_advisor(state: PipelineState) -> dict:
+def agent3_advisor(state: PipelineState) -> dict:
     """
-    Agent 4 — Portfolio Advisor
+    Agent 3 — Portfolio Advisor
     Generates Black-Litterman views, runs optimisation,
     produces recommendation table and advisory commentary.
     """
-    print(f"  [Agent 4] Advisor running")
+    print(f"  [Agent 3] Advisor running")
 
     n = len(state["tickers"])
     equal_weight = round(1.0 / n, 4)

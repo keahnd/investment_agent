@@ -40,16 +40,17 @@ class PipelineState(TypedDict):
     quant_commentary:  Optional[str]   # LLM anomaly flags and interpretation
 
     # ── Agent 3 outputs ──────────────────────────────────────────
+    bl_views:              Optional[dict]  # {ticker: {view_return, confidence, reasoning}}
+    posterior_mu:          Optional[dict]  # {ticker: bl_adjusted_mu}
+    recommended_weights:   Optional[dict]  # {ticker: weight}
+    recommendation_table:  Optional[list]  # list of dicts for report rendering
+    advisory_commentary:   Optional[str]
+
+    # ── Agent 4 outputs ──────────────────────────────────────────
     mc_current:       Optional[dict]  # Monte Carlo stats per-ticker
     mc_port_current:  Optional[dict]  # Monte Carlo stats for current weights
     mc_port_rebalanced:    Optional[dict]  # Monte Carlo stats for suggested weights
     sim_commentary:  Optional[str]
-
-    # ── Agent 4 outputs ──────────────────────────────────────────
-    bl_views:              Optional[dict]  # {ticker: {view_return, confidence, reasoning}}
-    recommended_weights:   Optional[dict]  # {ticker: weight}
-    recommendation_table:  Optional[list]  # list of dicts for report rendering
-    advisory_commentary:   Optional[str]
 
     # ── Pipeline metadata ────────────────────────────────────────
     errors:       Optional[list]   # non-fatal errors accumulate here
