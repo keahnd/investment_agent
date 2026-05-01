@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import pandas as pd
 
 from agents.state import PipelineState
 from agents.llm import get_llm
@@ -50,7 +51,7 @@ Company context:
   Earnings proximity:  Next earnings
     Note: if earnings are within 7 days, reduce confidence by 1 and explicitly indicate earnings are upcoming.
     
-{date}
+{data}
 
 Reference thresholds (use as guidelines, not hard rules):
   PEG:      < 0.5 strongly cheap, < 0.8 cheap, 1.0 fair, > 2.0 expensive
@@ -81,6 +82,41 @@ Return only valid JSON. No preamble, no markdown code fences.
 Ticker keys must exactly match the ticker values passed in.
 """
 
+
+def _parse_views(raw: str, tickers: list[str]) -> dict:
+    """
+    Parses and validates the LLM JSON response for sentiment views.
+    Strips markdown fences, clips numeric fields, and fills neutral fallbacks
+    for any tickers missing from the response.
+    """
+    def _neutral() -> dict:
+        return {
+            "view_return": 0.0,
+            "confidence": 1,
+            "sentiment_direction": "neutral",
+            "valuation_signal": "neutral",
+            "conflict": False,
+            "reasoning": "No view generated — using neutral fallback.",
+        }
+
+    raw = raw.replace("```json", "").replace("```", "").strip()
+
+    try:
+        views = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"    [warn] LLM returned invalid JSON: {e}")
+        return {ticker: _neutral() for ticker in tickers}
+
+    for ticker in tickers:
+        if ticker not in views:
+            views[ticker] = _neutral()
+        else:
+            views[ticker]["view_return"] = max(-0.30, min(0.30, float(views[ticker].get("view_return", 0.0))))
+            views[ticker]["confidence"]  = max(1, min(5, int(views[ticker].get("confidence", 1))))
+
+    return views
+
+
 def generate_sentiment_views(
         tickers: list[str],
         summaries: dict,
@@ -90,39 +126,22 @@ def generate_sentiment_views(
         fear_greed: dict,
         cape: float,
         file = None,
-    ) -> json:
+    ) -> dict:
     """
-    Calls the LLM to interpret sentiment outputs, from agent 1 per ticker.
-
-    Passes sentiment data to SENTIMENT_PROMPT, which asks the LLM LLM to produce a JSON structure per ticker 
-    containing view_return_raw (estimated annual return relative to market equilibrium,
-    e.g. 0.03 meaning 3% above), confidence (1 to 5), and reasoning (one sentence)
-
-    Args:
-        tickers: List of ticker symbols to include in the commentary.
-        summaries: Dict of sentiment data gathered per ticker.
-        earnings_dates: Dict of next earnings date for each ticker.
-        aaii_sentiment: Dict of market sentiment.
-        fear_greed: Dict of market fear/greed indication.
-        cape: float the current shiller cape value
-        file: Text file to store raw output.
-
-    Returns:
-        Plain prose commentary, one paragraph per ticker labelled with the
-        ticker symbol. Returns a fallback string if the LLM call fails.
+    Calls the LLM to interpret sentiment data per ticker and returns a parsed
+    dict keyed by ticker. Falls back to neutral values if the call fails.
     """
-    # Build a structured summary of all metrics per ticker
     data_lines = []
-    
+
     data_lines.append(f"""Market Data:
         Fear/Greed: {fear_greed}
         aaii_sentiment: {aaii_sentiment}
         Shiller Cape: {cape}""")
-    
+
     for ticker in tickers:
-        sent  = summaries.get(ticker, {})
-        earnings_date  = earnings_dates.get(ticker, {})
-        valuation = valuations.get(ticker, {})
+        sent          = summaries.get(ticker, {})
+        earnings_date = earnings_dates.get(ticker, {})
+        valuation     = valuations.get(ticker, {})
 
         data_lines.append(f"""Ticker = {ticker}:
         News Summary: {sent}, \
@@ -130,17 +149,18 @@ def generate_sentiment_views(
         Valuation Data: {valuation}""")
 
     prompt = SENTIMENT_PROMPT.format(
-        data = "\n".join(data_lines),
+        data="\n".join(data_lines),
     )
 
     try:
         llm      = get_llm()
         response = llm.invoke(prompt)
-        print(f"\n LLM Commentary:{response.content.strip()}", file=file)
-        return response.content.strip()
+        raw = response.content.strip()
+        print(f"\n LLM raw response:\n{raw}", file=file)
+        return _parse_views(raw, tickers)
     except Exception as e:
-        print(f"    [warn] LLM commentary failed: {e}")
-        return "Quantitative commentary unavailable this run."
+        print(f"    [warn] LLM call failed: {e}")
+        return _parse_views("", tickers)
 
 
 def agent3_advisor(state: PipelineState) -> dict:
@@ -157,12 +177,15 @@ def agent3_advisor(state: PipelineState) -> dict:
     run_date  = state["run_date"]
     errors    = list(state.get("errors") or [])
     prior_mu = [state["mu_sigma"][t]["mu_annual"] for t in tickers]
+    # cov_df = pd.DataFrame(state["covariance_matrix"])
+    # cov_matrix = cov_df.loc[modelable, modelable]
     
     constraints = load_constraints(user_path)
     
-    bl_views = generate_sentiment_views(tickers, state["summaries"], state["earnings_dates"], 
-                    state["valuation"], ["aaii_sentiment"], state["fear_greed"], state["cape"])
-        
+    bl_views = generate_sentiment_views(tickers, state["summaries"], state["earnings_dates"],
+                    state["valuation"], state["aaii_sentiment"], state["fear_greed"], state["cape"])
+    
+    
 
     n = len(state["tickers"])
     equal_weight = round(1.0 / n, 4)
