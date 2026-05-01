@@ -988,8 +988,9 @@ def agent2_quant(state: PipelineState) -> dict:
         fm = None
         g = None
 
-        (raw_dir / ticker).mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / ticker / "quant.txt", "w", encoding="utf-8") as quant_file:
+        dir_name = ticker.removesuffix(".TO")
+        (raw_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / dir_name / "quant.txt", "w", encoding="utf-8") as quant_file:
             if factors_available:
                 try:
                     ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors, file=quant_file)

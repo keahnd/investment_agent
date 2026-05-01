@@ -21,12 +21,14 @@ def get_mu_for_tickers(tickers: list, state: PipelineState) -> list:
     """
     returns = []
     posterior = state.get("posterior_mu") or {}
-    
+
     for ticker in tickers:
         if ticker in posterior:
             returns.append(posterior[ticker])
         else:
-            return returns.append(state["mu_sigma"][ticker]["mu_annual"])
+            returns.append(state["mu_sigma"][ticker]["mu_annual"])
+
+    return np.array(returns)
 
 
 def run_monte_carlo(mu: float, sigma: float, S0: float, file=None):
@@ -340,8 +342,9 @@ def agent4_simulator(state: PipelineState) -> dict:
     for ticker in tickers:
         print(f"\nMonte Carlo Sim: Ticker ({ticker})")
         state_info = port_info[ticker]
-        (raw_dir / ticker).mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / ticker / "mc_sim.txt", "w", encoding="utf-8") as f:
+        dir_name = ticker.removesuffix(".TO")
+        (raw_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / dir_name / "quant.txt", "w", encoding="utf-8") as f:
             mc_current[ticker] = run_monte_carlo(
                 state_info["mu_annual"], state_info["sigma_annual"], state_info["s_current"], file=f
             )

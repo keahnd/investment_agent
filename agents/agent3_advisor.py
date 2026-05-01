@@ -83,8 +83,13 @@ Important context to apply:
   - Energy and financial companies have cyclical earnings — P/E is less reliable,
     weight EV/EBITDA and book value more heavily for these sectors
   - Negative P/E means the company is loss-making — do not apply P/E thresholds
+  - An expensive valuation should dampen a positive sentiment view. A cheap valuation should amplify it.
   - Very high P/E (above 100) usually means near-zero earnings — treat as uninformative
   - If sentiment and valuation conflict, note this explicitly and explain your reasoning
+  - Be willing to assign negative view_return when sentiment is weak, valuation is stretched, 
+    or there are material headwinds. Neutral or negative views are expected and appropriate.
+  - if Fear&Greed is at 80 (extreme greed) and AAII is bearish, the macro context should pull 
+    individual views down even when company-specific news is positive
   
 Produce a single JSON object where each key is a ticker symbol and 
 each value contains:
@@ -230,17 +235,19 @@ def agent3_advisor(state: PipelineState) -> dict:
     raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     for i, ticker in enumerate(tickers):
-        (raw_dir / ticker).mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / ticker / "advisor.txt", "w", encoding="utf-8") as advisor_file:
-            print(f"Historical Returns Estimate: {prior_mu[i]}")#, file=advisor_file)
-            print(f"Views: {bl_views[ticker]}")#, file=advisor_file)
-            print(f"posterior returns: {posterior_mu[ticker]}")#, file=advisor_file)
+        dir_name = ticker.removesuffix(".TO")
+        (raw_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / dir_name / "quant.txt", "w", encoding="utf-8") as advisor_file:
+            print(f"Historical Returns Estimate: {prior_mu[i]}", file=advisor_file)
+            print(f"Views: {bl_views[ticker]}", file=advisor_file)
+            print(f"posterior returns: {posterior_mu[ticker]}", file=advisor_file)
 
     n = len(state["tickers"])
     equal_weight = round(1.0 / n, 4)
 
     return {
         "bl_views": bl_views,
+        "posterior_mu": posterior_mu,
         "recommended_weights": {t: equal_weight for t in state["tickers"]},
         "recommendation_table": [
             {
