@@ -1,9 +1,14 @@
 from pathlib import Path
 import json
 import pandas as pd
+import numpy as np
+from pypfopt.black_litterman import BlackLittermanModel
 
 from agents.state import PipelineState
 from agents.llm import get_llm
+
+UNCERTAINTY_SCALE = 0.05   # from config — tune this over time
+
 
 def load_constraints(user_path: Path) -> dict:
     """
@@ -25,6 +30,18 @@ def load_constraints(user_path: Path) -> dict:
                     "max_allocation_per_asset", "max_allocation_per_sector", "min_cash_buffer")
             }
     return constr
+
+
+def confidence_to_omega(confidence, asset_variance, uncertainty_scale):
+    """
+    Converts a 1-5 confidence score to an omega uncertainty value.
+    Confidence 5 = low uncertainty = small omega = view pulls posterior strongly
+    Confidence 1 = high uncertainty = large omega = view barely moves posterior
+    """
+    # Invert confidence so high confidence = small uncertainty
+    uncertainty_factor = (6 - confidence) / 5.0
+    # Scale 1.0 at confidence 1 down to 0.2 at confidence 5
+    return uncertainty_factor * uncertainty_scale * asset_variance
 
 
 # LLM Sentiment Analysis
@@ -156,7 +173,6 @@ def generate_sentiment_views(
         llm      = get_llm()
         response = llm.invoke(prompt)
         raw = response.content.strip()
-        print(f"\n LLM raw response:\n{raw}", file=file)
         return _parse_views(raw, tickers)
     except Exception as e:
         print(f"    [warn] LLM call failed: {e}")
@@ -177,15 +193,48 @@ def agent3_advisor(state: PipelineState) -> dict:
     run_date  = state["run_date"]
     errors    = list(state.get("errors") or [])
     prior_mu = [state["mu_sigma"][t]["mu_annual"] for t in tickers]
-    # cov_df = pd.DataFrame(state["covariance_matrix"])
-    # cov_matrix = cov_df.loc[modelable, modelable]
+    cov_df = pd.DataFrame(state["covariance_matrix"])
+    cov_matrix = cov_df.loc[tickers, tickers]
     
     constraints = load_constraints(user_path)
     
     bl_views = generate_sentiment_views(tickers, state["summaries"], state["earnings_dates"],
                     state["valuation"], state["aaii_sentiment"], state["fear_greed"], state["cape"])
     
+    views = {
+        ticker: prior_mu[i] + bl_views[ticker]["view_return"]
+        for i, ticker in enumerate(tickers)
+    }
+    variances = np.diag(cov_matrix.values)   # diagonal of covariance matrix
+    omega_diag = np.array([
+        confidence_to_omega(
+            bl_views[t]["confidence"],
+            variances[i],
+            UNCERTAINTY_SCALE
+        )
+        for i, t in enumerate(tickers)
+    ])
+    omega = np.diag(omega_diag)
+    print(f"omega: {omega}")
+    bl = BlackLittermanModel(
+        cov_matrix   = cov_matrix,
+        pi           = np.array(prior_mu),          # factor model mu as prior
+        absolute_views = views,           # {ticker: view_return}
+        omega        = omega,             # uncertainty matrix
+    )
     
+    posterior_mu  = bl.bl_returns().to_dict()    # pandas Series, one value per ticker
+    posterior_cov = bl.bl_cov()        # DataFrame, posterior covariance matrix  
+    
+    
+    raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    for i, ticker in enumerate(tickers):
+        (raw_dir / ticker).mkdir(parents=True, exist_ok=True)
+        with open(raw_dir / ticker / "advisor.txt", "w", encoding="utf-8") as advisor_file:
+            print(f"Historical Returns Estimate: {prior_mu[i]}")#, file=advisor_file)
+            print(f"Views: {bl_views[ticker]}")#, file=advisor_file)
+            print(f"posterior returns: {posterior_mu[ticker]}")#, file=advisor_file)
 
     n = len(state["tickers"])
     equal_weight = round(1.0 / n, 4)

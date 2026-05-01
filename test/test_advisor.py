@@ -43,6 +43,10 @@ test_state = {
         "MSFT": "2025-07-23",
     },
     "cape": 36.4,
+    "covariance_matrix": { 
+        "AAPL": {"AAPL": 2.480e-4, "MSFT": 5.96e-5},
+        "MSFT":  {"AAPL": 5.96e-5,  "MSFT": 1.587e-4},
+    },
 }
 
 result = agent3_advisor(test_state)
