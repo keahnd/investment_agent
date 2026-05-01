@@ -6,14 +6,35 @@ import csv
 from datetime import date
 from pathlib import Path
 from dotenv import load_dotenv
+import yfinance as yf
 
 from agents.graph import pipeline_graph
 
 load_dotenv()
 
 
-def load_tickers(user_path: Path) -> list[str]:
+def fetch_usd_cad_rate() -> float:
+    """
+    Fetches current USD/CAD exchange rate from yfinance.
+    Returns how many CAD per 1 USD.
+    Falls back to 1.36 if fetch fails.
+    """
+    try:
+        rate = yf.Ticker("USDCAD=X").info.get("regularMarketPrice")
+        if rate and 1.0 < rate < 2.0:   # sanity check
+            return float(rate)
+    except:
+        pass
+    print("  [warn] USD/CAD fetch failed, using fallback rate of 1.36")
+    return 1.36
+
+
+def load_tickers(user_path: Path, usd_cad_rate: float) -> list[str]:
 	tickers = []
+	weights = {}
+	total_value_cad = 0
+	rows = []
+
 	with open(user_path / "portfolio.csv", newline="") as f:
 		reader = csv.DictReader(f)
 		for row in reader:
@@ -22,7 +43,21 @@ def load_tickers(user_path: Path) -> list[str]:
 			if exchange == "TSX":
 				sym += ".TO"
 			tickers.append(sym)
-	return tickers
+			market_value = float(row["Market Price"])
+			currency = row.get("Market Price Currency", "CAD").strip().upper()
+
+			# Convert to CAD
+			if currency == "USD":
+				market_value = market_value * usd_cad_rate
+
+			tickers.append(ticker)
+			rows.append((ticker, market_value))
+			total_value_cad += market_value
+
+	for ticker, market_value in rows:
+		weights[ticker] = round(market_value / total_value_cad, 6)
+
+	return tickers, weights, total_value_cad
 
 
 def run_user(user_path: Path) -> None:
@@ -30,8 +65,10 @@ def run_user(user_path: Path) -> None:
 	print(f"\n{'='*60}")
 	print(f"  Running pipeline for: {user_name}")
 	print(f"{'='*60}")
+ 
+	usd_cad_rate = fetch_usd_cad_rate()
 
-	tickers = load_tickers(user_path)
+	tickers, weights, total_value = load_tickers(user_path, usd_cad_rate)
 
 	initial_state = {
 		# Run metadata
@@ -39,6 +76,10 @@ def run_user(user_path: Path) -> None:
 		"user_path":  str(user_path.resolve()),
 		"run_date":   date.today().isoformat(),
 		"tickers":    tickers,
+		"current_weights":  weights,
+		"cad_usd_rate":		usd_cad_rate,
+		"total_portfolio_value": total_value,
+		"strategies":		["equal_weight"],
 
 		# All agent outputs start as None
 		"raw_text":             None,

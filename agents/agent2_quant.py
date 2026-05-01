@@ -927,6 +927,7 @@ def agent2_quant(state: PipelineState) -> dict:
     run_date = date.fromisoformat(state["run_date"])
     start_date = (date.today() - timedelta(days=int(HISTORY_YEARS * 365)))
     errors   = list(state.get("errors") or [])
+    existing_errors = len(errors)
     
     # ── Results containers ────────────────────────────────────────────────────
     factor_results   = {}
@@ -957,6 +958,10 @@ def agent2_quant(state: PipelineState) -> dict:
             "quant_commentary": "Quantitative analysis unavailable — price data download failed.",
             "errors":           errors,
         }
+    
+    # Build Covariance Matrix for agent 3
+    returns_df = np.log(raw_prices / raw_prices.shift(1)).dropna()
+    cov_matrix = returns_df[tickers].cov().to_dict()  # serialisable as nested dict
     
     # Fetch FF Factors
     factors_available = False
@@ -1053,7 +1058,7 @@ def agent2_quant(state: PipelineState) -> dict:
         earnings_data,
     )
 
-    print(f"\n  [Agent 2] Complete. Errors: {len(errors)}")
+    print(f"\n  [Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
 
     return {
         "factor_results":   factor_results,
@@ -1064,5 +1069,6 @@ def agent2_quant(state: PipelineState) -> dict:
         "earnings_data":    earnings_data,
         "earnings_dates":   earnings_dates,
         "quant_commentary": quant_commentary,
+        "covariance_matrix":cov_matrix,
         "errors":           errors,
     }

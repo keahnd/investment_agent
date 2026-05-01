@@ -1,4 +1,5 @@
 from typing import TypedDict, Optional
+import pandas as pd
 
 
 class PipelineState(TypedDict):
@@ -15,6 +16,11 @@ class PipelineState(TypedDict):
     user_path:   str        # absolute path to this user's folder
     run_date:    str        # ISO format: "2025-04-21"
     tickers:     list[str]  # from portfolio.csv
+    current_weights:   Optional[dict]  # {ticker: weight} computed from portfolio.csv
+    cad_usd_rate:      Optional[float] # Current USD-CAD exchange rate
+    total_portfolio_value: Optional[float] # Current portfolio value
+    strategies:        Optional[list] # Rebalancing strategies
+    
 
     # ── Agent 1 outputs ──────────────────────────────────────────
     raw_text:        Optional[dict]  # {ticker: raw scraped text}
@@ -30,11 +36,13 @@ class PipelineState(TypedDict):
     financial_health:  Optional[dict]  # {ticker: {revenue_growth, fcf_margin, roic, ...}}
     earnings_data:     Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
     earnings_dates:    Optional[dict]  # {ticker: next_earnings_date}
+    covariance_matrix: Optional[dict] # Covariance Matrix for the universe of stocks
     quant_commentary:  Optional[str]   # LLM anomaly flags and interpretation
 
     # ── Agent 3 outputs ──────────────────────────────────────────
-    mc_current:       Optional[dict]  # Monte Carlo stats for current weights
-    mc_rebalanced:    Optional[dict]  # Monte Carlo stats for suggested weights
+    mc_current:       Optional[dict]  # Monte Carlo stats per-ticker
+    mc_port_current:  Optional[dict]  # Monte Carlo stats for current weights
+    mc_port_rebalanced:    Optional[dict]  # Monte Carlo stats for suggested weights
     risk_commentary:  Optional[str]
 
     # ── Agent 4 outputs ──────────────────────────────────────────
