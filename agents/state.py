@@ -43,7 +43,7 @@ class PipelineState(TypedDict):
     mc_current:       Optional[dict]  # Monte Carlo stats per-ticker
     mc_port_current:  Optional[dict]  # Monte Carlo stats for current weights
     mc_port_rebalanced:    Optional[dict]  # Monte Carlo stats for suggested weights
-    risk_commentary:  Optional[str]
+    sim_commentary:  Optional[str]
 
     # ── Agent 4 outputs ──────────────────────────────────────────
     bl_views:              Optional[dict]  # {ticker: {view_return, confidence, reasoning}}

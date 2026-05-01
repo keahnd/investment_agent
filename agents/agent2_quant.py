@@ -1049,14 +1049,18 @@ def agent2_quant(state: PipelineState) -> dict:
 
     # ── LLM anomaly commentary ────────────────────────────────────────────────
     print(f"\n    Generating quantitative commentary...")
-    quant_commentary = generate_quant_commentary(
-        tickers,
-        factor_results,
-        garch_results,
-        valuation,
-        financial_health,
-        earnings_data,
-    )
+    try:
+        quant_commentary = generate_quant_commentary(
+            tickers,
+            factor_results,
+            garch_results,
+            valuation,
+            financial_health,
+            earnings_data,
+        )
+    except Exception as e:
+            errors.append(f"Quant Commentary Failed: {e}")
+            quant_commentary = None
 
     print(f"\n  [Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
 

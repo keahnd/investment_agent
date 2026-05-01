@@ -96,7 +96,7 @@ def run_user(user_path: Path) -> None:
 		"quant_commentary":  	None,
 		"mc_current":           None,
 		"mc_rebalanced":        None,
-		"risk_commentary":      None,
+		"sim_commentary":      None,
 		"bl_views":             None,
 		"recommended_weights":  None,
 		"recommendation_table": None,

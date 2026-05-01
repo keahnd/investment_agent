@@ -3,6 +3,11 @@ import pandas as pd
 import scipy.stats as stats
 
 from agents.state import PipelineState
+from agents.llm import get_llm
+
+
+def _fmt(val: float | None, spec: str) -> str:
+    return format(val, spec) if val is not None else "N/A"
 
 
 def run_monte_carlo(mu: float, sigma: float, S0: float, file=None):
@@ -74,8 +79,8 @@ def run_monte_carlo(mu: float, sigma: float, S0: float, file=None):
         "S_T": S_T,
         "E_ST": E_ST,
         "prob_up": prob_up,
-        "VaR_95": VaR_95,
-        "CVaR_95": CVaR_95,
+        "VaR_95": pct[1],
+        "VaR_99": pct[0],
         "pct": pct,
         "N_paths": N_paths,
         "N_steps": N_steps,
@@ -158,8 +163,8 @@ def port_monte_carlo(mu: np.ndarray, covar_ann: np.ndarray, init_port_value: flo
         "S_T": S_T,
         "E_ST": E_ST,
         "prob_up": prob_up,
-        "VaR_95": VaR_95,
-        "CVaR_95": CVaR_95,
+        "VaR_95": pct[1],
+        "VaR_99": pct[0],
         "pct": pct,
         "N_paths": N_paths,
         "N_steps": N_steps,
@@ -174,6 +179,104 @@ def get_rebalanced_weights(tickers):
     STUB for now
     """
     return [1/len(tickers)] * len(tickers)
+
+
+# LLM SIM SUMMARY
+ANOMALY_PROMPT = """You are a quantitative analyst reviewing simulation outputs for a portfolio.
+
+For each monte carlo simulation, done per ticker, the current portfolio and the rebalanced portfolios
+
+Address these specific items:
+- Tail risk in dollar terms.
+- Which individual tickers drive the most risk and the most returns.
+- The probability of gains from prob_up
+- Fallback acknowledgement, if any tickers have fallback_present as true then the simulation was run on default assumptions
+and should be treated as such. Dont't mention fallback unless its present.
+
+Data:
+{data}
+
+For each ticker and portfolio write 2-3 sentences maximum summarising the simulation results.
+Compare the upside and expected returns to the downside risk.
+Compare the different portfolios to each other in terms of expected returns, probability of
+gains and downside risk measures."""
+
+
+def generate_sim_commentary(
+        tickers: list[str],
+        strategies: list[str],
+        mc_tickers: dict,
+        mc_curr_port: dict,
+        mc_rebal_port: dict,
+        fallback_present: dict
+    ) -> str:
+    """
+    Calls the LLM to interpret simulation outputs per ticker/portfolio.
+
+    Builds a structured simulation summary for each ticker and portfolio
+
+    Args:
+        tickers: List of ticker symbols to include in the commentary.
+        mc_tickers: Dict of per-ticker sim results
+        mc_curr_port: Dict of current protfolio sim results
+        mc_rebal_port: Dict of rebalanced portfolio sim results
+        fallback_present: Dict of whether ticker has real data or assumed data
+
+    Returns:
+        Plain prose commentary, one paragraph per ticker labelled with the
+        ticker symbol. Returns a fallback string if the LLM call fails.
+    """
+    # Build a structured summary of all metrics per ticker
+    data_lines = []
+    for ticker in tickers:        
+        fr  = mc_tickers.get(ticker, {})
+
+        pct = fr.get('pct', [None]*7)
+        data_lines.append(f"""{ticker}:
+        E[S_T]={_fmt(fr.get('E_ST'), '.2f')}, median={_fmt(pct[3], '.2f')}, \
+        S_current={_fmt(fr.get('S_current'), '.2f')}
+        Prob(up)={_fmt(fr.get('prob_up'), '.2%')}
+        VaR_95={_fmt(fr.get('VaR_95'), '.2f')}, CVaR_95={_fmt(fr.get('CVaR_95'), '.2f')}
+        Percentiles: 1%={_fmt(pct[0], '.2f')}, 5%={_fmt(pct[1], '.2f')}, \
+            25%={_fmt(pct[2], '.2f')}, 75%={_fmt(pct[4], '.2f')}, \
+            95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')},
+        Fallback: {fallback_present.get(ticker, True)}
+        """)
+    
+    fr = mc_curr_port
+    pct = fr.get('pct', [None]*7)
+    data_lines.append(f"""Current Portfolio:
+        E[S_T]={_fmt(fr.get('E_ST'), '.2f')}, median={_fmt(pct[3], '.2f')}, \
+            S_current={_fmt(fr.get('S_current'), '.2f')}
+        Prob(up)={_fmt(fr.get('prob_up'), '.2%')}
+        VaR_95={_fmt(fr.get('VaR_95'), '.2f')}, CVaR_95={_fmt(fr.get('CVaR_95'), '.2f')}
+        Percentiles: 1%={_fmt(pct[0], '.2f')}, 5%={_fmt(pct[1], '.2f')}, \
+            25%={_fmt(pct[2], '.2f')}, 75%={_fmt(pct[4], '.2f')}, \
+            95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')}
+        """)
+    
+    for strat in strategies:
+        fr = mc_rebal_port[strat]
+        pct = fr.get('pct', [None]*7)
+        data_lines.append(f"""{strat}:
+        E[S_T]={_fmt(fr.get('E_ST'), '.2f')}, median={_fmt(pct[3], '.2f')}, \
+            S_current={_fmt(fr.get('S_current'), '.2f')}
+        Prob(up)={_fmt(fr.get('prob_up'), '.2%')}
+        VaR_95={_fmt(fr.get('VaR_95'), '.2f')}, CVaR_95={_fmt(fr.get('CVaR_95'), '.2f')}
+        Percentiles: 1%={_fmt(pct[0], '.2f')}, 5%={_fmt(pct[1], '.2f')}, \
+            25%={_fmt(pct[2], '.2f')}, 75%={_fmt(pct[4], '.2f')}, \
+            95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')}
+        """)
+
+    prompt = ANOMALY_PROMPT.format(data = "\n".join(data_lines))
+
+    try:
+        llm      = get_llm()
+        response = llm.invoke(prompt)
+        return response.content.strip()
+    except Exception as e:
+        print(f"    [warn] LLM commentary failed: {e}")
+        return "Simulation commentary unavailable this run."
     
 
 
@@ -202,6 +305,7 @@ def agent3_simulator(state: PipelineState) -> dict:
     strategies = state["strategies"]
     port_info = state["mu_sigma"]
     mu_vec = np.array([port_info[t]["mu_annual"] for t in tickers])
+    fallback_present = {t: port_info[t]["is_fallback"] for t in tickers}
     
     
     mc_current = {}
@@ -220,13 +324,20 @@ def agent3_simulator(state: PipelineState) -> dict:
         print(f"\nMonte Carlo Sim: Rebalanced ({strategy})")
         weights = get_rebalanced_weights(tickers)
         mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights)
-        
+    
+    
+    try:
+        sim_commentary = generate_sim_commentary(tickers, strategies, mc_current, mc_port_current, mc_port_rebalanced, fallback_present)
+    except Exception as e:
+            errors.append(f"Sim Commentary Failed: {e}")
+            sim_commentary = None
+            
     print(f"\n  [Agent 3] Complete. New Errors: {len(errors) - existing_errors}")
 
     return {
         "mc_current":     mc_current,
         "mc_port_current": mc_port_current,
         "mc_port_rebalanced":  mc_port_rebalanced,
-        "risk_commentary": "[STUB] Simulation not yet implemented.",
+        "sim_commentary": sim_commentary,
         "errors": errors,
     }

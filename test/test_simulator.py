@@ -41,9 +41,9 @@ test_state = {
     "factor_results":   None,
     "garch_results":    None,
     "mu_sigma": {
-        "AAPL": {"mu_annual": 0.12,  "sigma_annual": 0.25, "s_current": 175.0},
-        "LMT":  {"mu_annual": 0.09,  "sigma_annual": 0.20, "s_current": 450.0},
-        "JNJ":  {"mu_annual": 0.07,  "sigma_annual": 0.15, "s_current": 155.0},
+        "AAPL": {"mu_annual": 0.12,  "sigma_annual": 0.25, "s_current": 175.0, "is_fallback": False},
+        "LMT":  {"mu_annual": 0.09,  "sigma_annual": 0.20, "s_current": 450.0, "is_fallback": False},
+        "JNJ":  {"mu_annual": 0.07,  "sigma_annual": 0.15, "s_current": 155.0, "is_fallback": False},
     },
     "valuation":        None,
     "financial_health": None,
@@ -57,9 +57,10 @@ test_state = {
     "quant_commentary": None,
     
     # Agent 3 outputs — all None at start
-    "mc_current":           None,
-    "mc_rebalanced":        None,
-    "risk_commentary":      None,
+    "mc_current":     None,
+    "mc_port_current": None,
+    "mc_port_rebalanced":  None,
+    "sim_commentary":      None,
 }
 
 result = agent3_simulator(test_state)
@@ -68,8 +69,14 @@ result = agent3_simulator(test_state)
 print("\n=== mc_current ===")
 print(result["mc_current"])
 
-print("\n=== mc_rebalanced ===")
-print(result["mc_current"])
+print("\n=== mc_port_current ===")
+print(result["mc_port_current"])
+
+print("\n=== mc_port_rebalanced ===")
+print(result["mc_port_rebalanced"])
+
+print("\n=== sim_commentary ===")
+print(result["sim_commentary"])
 
 print("\n=== errors ===")
 for e in result["errors"]:
