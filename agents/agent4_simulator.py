@@ -204,7 +204,7 @@ def _fmt(val: float | None, spec: str) -> str:
     return format(val, spec) if val is not None else "N/A"
 
 # LLM SIM SUMMARY
-ANOMALY_PROMPT = """You are a quantitative analyst reviewing simulation outputs for a portfolio.
+SIMULATOR_PROMPT = """You are a quantitative analyst reviewing simulation outputs for a portfolio.
 
 For each monte carlo simulation, done per ticker, the current portfolio and the rebalanced portfolios
 
@@ -291,7 +291,7 @@ def generate_sim_commentary(
             95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')}
         """)
 
-    prompt = ANOMALY_PROMPT.format(data = "\n".join(data_lines))
+    prompt = SIMULATOR_PROMPT.format(data = "\n".join(data_lines))
 
     try:
         llm      = get_llm()

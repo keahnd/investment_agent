@@ -36,7 +36,8 @@ class PipelineState(TypedDict):
     financial_health:  Optional[dict]  # {ticker: {revenue_growth, fcf_margin, roic, ...}}
     earnings_data:     Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
     earnings_dates:    Optional[dict]  # {ticker: next_earnings_date}
-    covariance_matrix: Optional[dict] # Covariance Matrix for the universe of stocks
+    covariance_matrix: Optional[dict]  # Covariance Matrix for the universe of stocks
+    cape:              Optional[float] # Current Shiller CAPE number
     quant_commentary:  Optional[str]   # LLM anomaly flags and interpretation
 
     # ── Agent 3 outputs ──────────────────────────────────────────

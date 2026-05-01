@@ -460,6 +460,7 @@ def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
             info = yf.Ticker(ticker, session=session).info
             time.sleep(2)
             metrics = {
+                'market_cap': info.get('marketCap'),
                 'peg': info.get('trailingPegRatio'),
                 'fwd_pe': info.get('forwardPE'),
                 'ttm_pe': info.get('trailingPE'),
@@ -1083,5 +1084,6 @@ def agent2_quant(state: PipelineState) -> dict:
         "earnings_dates":   earnings_dates,
         "quant_commentary": quant_commentary,
         "covariance_matrix":cov_matrix,
+        "cape":             cape,
         "errors":           errors,
     }
