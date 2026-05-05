@@ -2,7 +2,11 @@ from pathlib import Path
 import json
 import pandas as pd
 import numpy as np
+import cvxpy as cp
 from pypfopt.black_litterman import BlackLittermanModel
+from pypfopt.objective_functions import L2_reg
+from pypfopt.efficient_frontier import EfficientFrontier
+from pypfopt import HRPOpt, objective_functions
 
 from agents.state import PipelineState
 from agents.llm import get_llm
@@ -26,7 +30,7 @@ def load_constraints(user_path: Path) -> dict:
         with open(config_path) as f:
             constr = {
                 k: v for k, v in json.load(f).items()
-                if k in ("risk_tolerance", "investment_horizon_years",
+                if k in ("risk_aversion", "investment_horizon_years", "action_threshold",
                     "max_allocation_per_asset", "max_allocation_per_sector", "min_cash_buffer")
             }
     return constr
@@ -42,6 +46,246 @@ def confidence_to_omega(confidence, asset_variance, uncertainty_scale):
     uncertainty_factor = (6 - confidence) / 5.0
     # Scale 1.0 at confidence 1 down to 0.2 at confidence 5
     return uncertainty_factor * uncertainty_scale * asset_variance
+
+
+def build_sector_constraints(tickers, valuation, constraints):
+    """
+    Groups tickers by sector and returns sector mapper dict
+    for PyPortfolioOpt's sector constraint.
+    """
+    max_sector = constraints["max_allocation_per_sector"]
+    
+    sector_mapper = {}
+    for ticker in tickers:
+        sector = valuation.get(ticker, {}).get("sector") or "Unknown"
+        sector_mapper[ticker] = sector
+    
+    # sector_upper is the same limit applied to every sector
+    sector_upper = {
+        sector: max_sector
+        for sector in set(sector_mapper.values())
+    }
+    
+    return sector_mapper, sector_upper
+
+
+def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
+    """
+    Robust Mean-Variance optimisation.
+    Maximises worst-case return within an ellipsoidal uncertainty set
+    around the posterior mu estimates.
+    
+    Equivalent to maximising:
+        mu.T @ w - epsilon * sqrt(w.T @ Sigma @ w) - lambda * w.T @ Sigma @ w
+    
+    Where epsilon controls robustness and lambda controls risk aversion.
+    """
+    n       = len(tickers)
+    mu      = posterior_mu.values if hasattr(posterior_mu, 'values') else np.array(posterior_mu)
+    sigma   = posterior_cov.values if hasattr(posterior_cov, 'values') else np.array(posterior_cov)
+    
+    epsilon        = 0.05
+    risk_aversion  = constraints["risk_aversion"]
+    min_w          = 0
+    max_w          = constraints["max_allocation_per_asset"]
+    
+    w = cp.Variable(n)
+    
+    # Portfolio variance term
+    port_variance = cp.quad_form(w, sigma)
+    
+    # Robustness penalty — worst case return reduction
+    # sqrt(w.T @ Sigma @ w) is the portfolio volatility
+    # epsilon scales how much we penalise for estimation uncertainty
+    robustness_penalty = epsilon * cp.sqrt(port_variance)
+    
+    # Objective: maximise risk-adjusted return minus robustness penalty
+    objective = cp.Maximize(
+        mu @ w 
+        - robustness_penalty
+        - 0.5 * risk_aversion * port_variance
+    )
+    
+    constraints = [
+        cp.sum(w) == 1,          # weights sum to 1
+        w >= min_w,              # minimum position size
+        w <= max_w,              # maximum position size
+    ]
+    
+    problem = cp.Problem(objective, constraints)
+    
+    try:
+        problem.solve(solver=cp.ECOS, warm_start=True)
+        
+        if problem.status not in ["optimal", "optimal_inaccurate"]:
+            raise ValueError(f"Solver status: {problem.status}")
+        
+        raw_weights = w.value
+        
+        # Clean small numerical noise
+        raw_weights = np.clip(raw_weights, min_w, max_w)
+        raw_weights = raw_weights / raw_weights.sum()
+        
+        return {t: round(float(raw_weights[i]), 6) for i, t in enumerate(tickers)}, None
+        
+    except Exception as e:
+        print(f"    [warn] Robust MV failed: {e}")
+        return None, str(e)
+
+
+def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraints):
+    """
+    Runs all optimisation strategies and returns results dict.
+    All strategy weights stored for report comparison.
+    """
+    results = {}
+    errors  = []
+    
+    mu_series  = pd.Series(posterior_mu)
+    cov_df     = pd.DataFrame(posterior_cov) if isinstance(posterior_cov, dict) else posterior_cov
+    
+    bounds  = (0, constraints["max_allocation_per_asset"])
+    sector_mapper, sector_upper = build_sector_constraints(
+        tickers, valuation, constraints
+    )
+    
+    # ── Max Sharpe ────────────────────────────────────────────────
+    try:
+        ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
+        ef.add_sector_constraints(sector_mapper, sector_upper=sector_upper)
+        ef.max_sharpe()
+        results["max_sharpe"] = dict(ef.clean_weights())
+    except Exception as e:
+        errors.append(f"Max Sharpe failed: {e}")
+        results["max_sharpe"] = None
+        
+    # ── Minimum Variance ─────────────────────────────────────────
+    try:
+        ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
+        ef.add_sector_constraints(sector_mapper, sector_upper=sector_upper)
+        ef.min_volatility()
+        results["min_variance"] = dict(ef.clean_weights())
+    except Exception as e:
+        errors.append(f"Min Variance failed: {e}")
+        results["min_variance"] = None
+        
+    # ── Risk Parity ───────────────────────────────────────────────
+    try:
+        hrp = HRPOpt(returns=None, cov_matrix=cov_df)
+        hrp.optimize()
+        results["risk_parity"] = dict(hrp.clean_weights())
+    except Exception as e:
+        errors.append(f"Risk Parity failed: {e}")
+        results["risk_parity"] = None
+        
+    # ── Target Return ─────────────────────────────────────────────
+    try:
+        target = 0.08 # Default target return
+        ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
+        ef.add_sector_constraints(sector_mapper, sector_upper=sector_upper)
+        ef.efficient_return(target_return=target)
+        results["target_return"] = dict(ef.clean_weights())
+    except Exception as e:
+        errors.append(f"Target Return failed: {e}")
+        results["target_return"] = None
+        
+    # ── Robust Mean-Variance ──────────────────────────────────────
+    try:
+        rmv_weights, rmv_error = run_robust_mean_variance(
+            mu_series, cov_df, tickers, constraints
+        )
+        if rmv_error:
+            raise ValueError(rmv_error)
+        results["robust_mv"] = rmv_weights
+    except Exception as e:
+        errors.append(f"Robust MV failed: {e}")
+        results["robust_mv"] = None
+
+    return results, errors
+
+
+def _action_label(delta: float, threshold: float) -> str:
+    if delta > threshold:
+        return "BUY"
+    elif delta < -threshold:
+        return "SELL"
+    else:
+        return "HOLD"
+
+
+def _consensus_action(actions: list[str]) -> str:
+    """
+    Returns the action the majority of strategies agree on.
+    If no majority, returns HOLD as the conservative default.
+    """
+    counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
+    for action in actions:
+        counts[action] = counts.get(action, 0) + 1
+    
+    majority = len(actions) // 2 + 1
+    for action, count in counts.items():
+        if count >= majority:
+            return action
+    
+    return "HOLD"
+
+
+def build_recommendation_table(
+    tickers: list,
+    current_weights: dict,
+    recommended_weights: dict,
+    bl_views: dict,
+    constraints: dict,
+) -> list[dict]:
+    """
+    Builds the recommendation table for the report and Agent 4 (simulator).
+    One row per ticker containing current weight, all strategy weights,
+    deltas, action labels, and BL view summary.
+    
+    Returns a list of dicts — one per ticker.
+    """
+    threshold = constraints["action_threshold"]
+    strategies = list(recommended_weights.keys())
+    
+    table = []
+    
+    for ticker in tickers:
+        current_w = current_weights.get(ticker, 0.0)
+        
+        row = {
+            "ticker":          ticker,
+            "current_weight":  round(current_w, 4),
+        }
+        
+        # Add weight and delta per strategy
+        strategy_deltas = {}
+        for strategy in strategies:
+            weights = recommended_weights.get(strategy) or {}
+            rec_w   = weights.get(ticker, 0.0)
+            delta   = rec_w - current_w
+            
+            row[f"{strategy}_weight"] = round(rec_w, 4)
+            row[f"{strategy}_delta"]  = round(delta, 4)
+            row[f"{strategy}_action"] = _action_label(delta, threshold)
+            
+            strategy_deltas[strategy] = delta
+        
+        # Consensus action — what do most strategies agree on
+        actions = [row[f"{strategy}_action"] for strategy in strategies]
+        row["consensus_action"] = _consensus_action(actions)
+        
+        # BL view summary for this ticker
+        view = bl_views.get(ticker, {})
+        row["view_return"]         = view.get("view_return")
+        row["confidence"]          = view.get("confidence")
+        row["sentiment_direction"] = view.get("sentiment_direction")
+        row["valuation_signal"]    = view.get("valuation_signal")
+        row["conflict"]            = view.get("conflict")
+        row["reasoning"]           = view.get("reasoning")
+        
+        table.append(row)
+    
+    return table
 
 
 # LLM Sentiment Analysis
@@ -254,22 +498,28 @@ def agent3_advisor(state: PipelineState) -> dict:
             print(f"Views: {bl_views[ticker]}", file=advisor_file)
             print(f"posterior returns: {posterior_mu[ticker]}", file=advisor_file)
 
-    n = len(state["tickers"])
-    equal_weight = round(1.0 / n, 4)
+    recommended_weights, opt_error = run_optimisation(
+        pd.Series(state["posterior_mu"]),
+        pd.DataFrame(state["covariance_matrix"]).loc[tickers, tickers],
+        tickers,
+        state["valuation"],
+        constraints,
+    )
+
+    errors.extend(opt_error)
+    
+    recommendation_table = build_recommendation_table(
+        tickers             = tickers,
+        current_weights     = state["current_weights"],
+        recommended_weights = recommended_weights,
+        bl_views            = bl_views,
+        constraints         = constraints,
+    )
 
     return {
         "bl_views": bl_views,
         "posterior_mu": posterior_mu,
-        "recommended_weights": {t: equal_weight for t in state["tickers"]},
-        "recommendation_table": [
-            {
-                "ticker":               t,
-                "current_weight":       None,
-                "recommended_weight":   equal_weight,
-                "delta":                None,
-                "action":               "STUB",
-            }
-            for t in state["tickers"]
-        ],
+        "recommended_weights": recommended_weights,
+        "recommendation_table": recommendation_table,
         "advisory_commentary": "[STUB] Advisory commentary not yet implemented.",
     }
