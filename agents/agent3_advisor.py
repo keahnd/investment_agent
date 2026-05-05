@@ -90,6 +90,18 @@ Important context to apply:
     or there are material headwinds. Neutral or negative views are expected and appropriate.
   - if Fear&Greed is at 80 (extreme greed) and AAII is bearish, the macro context should pull 
     individual views down even when company-specific news is positive
+  - Focus on valuations and growth prospects
+    
+Calibration guide for view_return:
+  Strongly positive sentiment + cheap valuation  → +0.04 to +0.06
+  Mild positive sentiment, fair valuation        → +0.01 to +0.02
+  Neutral sentiment                              → -0.01 to +0.01  (default to 0.0 if truly no signal)
+  Mild negative sentiment or stretched valuation → -0.02 to -0.03
+  Strongly negative sentiment + expensive        → -0.04 to -0.06
+
+  A neutral sentiment_direction must produce a view_return near 0.0.
+  Do not default to positive — negative and zero views are correct and expected
+  when the evidence does not support outperformance.
   
 Produce a single JSON object where each key is a ticker symbol and 
 each value contains:
@@ -232,12 +244,12 @@ def agent3_advisor(state: PipelineState) -> dict:
     posterior_cov = bl.bl_cov()        # DataFrame, posterior covariance matrix  
     
     
-    raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    sum_dir = Path(state["user_path"]) / "data" / state["run_date"] / "summaries"
+    sum_dir.mkdir(parents=True, exist_ok=True)
     for i, ticker in enumerate(tickers):
         dir_name = ticker.removesuffix(".TO")
-        (raw_dir / dir_name).mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / dir_name / "quant.txt", "w", encoding="utf-8") as advisor_file:
+        (sum_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        with open(sum_dir / dir_name / "advisor.txt", "w", encoding="utf-8") as advisor_file:
             print(f"Historical Returns Estimate: {prior_mu[i]}", file=advisor_file)
             print(f"Views: {bl_views[ticker]}", file=advisor_file)
             print(f"posterior returns: {posterior_mu[ticker]}", file=advisor_file)

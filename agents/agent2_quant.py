@@ -383,6 +383,7 @@ def run_garch(residuals: np.ndarray, factor_vols: np.ndarray, b_MKT: float, b_SM
     """
     model = arch_model(residuals * 100, vol='Garch', p=1, q=1, dist='normal', rescale=False)
     res = model.fit(disp='off')
+    garch_converged = res.convergence_flag == 0
 
     omega_g = res.params['omega'] / 1e4
     alpha_g_est = res.params['alpha[1]']
@@ -403,6 +404,8 @@ def run_garch(residuals: np.ndarray, factor_vols: np.ndarray, b_MKT: float, b_SM
     pvalues = res.pvalues
 
     print("\n[GARCH(1,1) on Idiosyncratic Residuals]", file=file)
+    if not garch_converged:
+        print(f"  [warn] GARCH did not converge (code {res.convergence_flag}) — estimates may be unreliable", file=file)
     print(f"  omega               : {omega_g:.2e}  (p={pvalues['omega']:.3f})", file=file)
     print(f"  alpha (ARCH)        : {alpha_g_est:.4f}  (p={pvalues['alpha[1]']:.3f})", file=file)
     print(f"  beta  (GARCH)       : {beta_g_est:.4f}  (p={pvalues['beta[1]']:.3f})", file=file)
@@ -421,7 +424,8 @@ def run_garch(residuals: np.ndarray, factor_vols: np.ndarray, b_MKT: float, b_SM
         "alpha_garch": alpha_g_est,
         "beta_garch": beta_g_est,
         "sigma_current_vol": sigma_current_daily,
-        "vol_regime": "elevated" if garch_persist > 0.97 else "normal"      
+        "vol_regime": "elevated" if garch_persist > 0.97 else "normal",
+        "garch_converged": garch_converged,
     }
     
 
@@ -595,7 +599,7 @@ def fetch_financial_health(ticker: str) -> dict:
 
             if "Total Revenue" in income.index:
                 rev = income.loc["Total Revenue"]
-                financial_health["fcf_margin"] = round(float(fcf.iloc[0] / rev.iloc[0]), 4)
+                financial_health["fcf_margin"] = round(float(fcf.iloc[0] / rev.iloc[0]), 4) if rev.iloc[0] != 0 else None
                 
         # Earnings quality — OCF vs net income
         # Consistently above 1.0 means profits are backed by real cash
@@ -981,16 +985,16 @@ def agent2_quant(state: PipelineState) -> dict:
     cape    = fetch_cape()
     real_rf = fetch_real_rf()
 
-    raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    sum_dir = Path(state["user_path"]) / "data" / state["run_date"] / "summaries"
+    sum_dir.mkdir(parents=True, exist_ok=True)
 
     for ticker in tickers:
         fm = None
         g = None
 
         dir_name = ticker.removesuffix(".TO")
-        (raw_dir / dir_name).mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / dir_name / "quant.txt", "w", encoding="utf-8") as quant_file:
+        (sum_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        with open(sum_dir / dir_name / "quant.txt", "w", encoding="utf-8") as quant_file:
             if factors_available:
                 try:
                     ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors, file=quant_file)
@@ -1059,7 +1063,7 @@ def agent2_quant(state: PipelineState) -> dict:
     # ── LLM anomaly commentary ────────────────────────────────────────────────
     print(f"\n    Generating quantitative commentary...")
     try:
-        with open(raw_dir / "llm_quant.txt", "w", encoding="utf-8") as quant_file:
+        with open(sum_dir / "llm_quant.txt", "w", encoding="utf-8") as quant_file:
             quant_commentary = generate_quant_commentary(
                 tickers,
                 factor_results,

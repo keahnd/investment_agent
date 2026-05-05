@@ -333,7 +333,7 @@ def agent4_simulator(state: PipelineState) -> dict:
     mu_vec = get_mu_for_tickers(tickers, state)
     fallback_present = {t: port_info[t]["is_fallback"] for t in tickers}
 
-    raw_dir = Path(state["user_path"]) / "data" / state["run_date"] / "raw"
+    sum_dir = Path(state["user_path"]) / "data" / state["run_date"] / "summaries"
 
     mc_current = {}
     mc_port_current = {}
@@ -343,29 +343,29 @@ def agent4_simulator(state: PipelineState) -> dict:
         print(f"\nMonte Carlo Sim: Ticker ({ticker})")
         state_info = port_info[ticker]
         dir_name = ticker.removesuffix(".TO")
-        (raw_dir / dir_name).mkdir(parents=True, exist_ok=True)
-        with open(raw_dir / dir_name / "quant.txt", "w", encoding="utf-8") as f:
+        (sum_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        with open(sum_dir / dir_name / "quant.txt", "w", encoding="utf-8") as f:
             mc_current[ticker] = run_monte_carlo(
                 state_info["mu_annual"], state_info["sigma_annual"], state_info["s_current"], file=f
             )
 
-    port_raw_dir = raw_dir / "_portfolio"
-    port_raw_dir.mkdir(parents=True, exist_ok=True)
+    port_sum_dir = sum_dir / "_portfolio"
+    port_sum_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\nMonte Carlo Sim: current weights")
-    with open(port_raw_dir / "mc_current.txt", "w", encoding="utf-8") as f:
+    with open(port_sum_dir / "mc_current.txt", "w", encoding="utf-8") as f:
         mc_port_current = port_monte_carlo(mu_vec, Sigma, total_value, curr_weights, file=f)
 
     for strategy in strategies:
         print(f"\nMonte Carlo Sim: Rebalanced ({strategy})")
         weights = get_rebalanced_weights(tickers)
-        with open(port_raw_dir / f"mc_{strategy}.txt", "w", encoding="utf-8") as f:
+        with open(port_sum_dir / f"mc_{strategy}.txt", "w", encoding="utf-8") as f:
             mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights, file=f)
     
     
     try:
-        with open(port_raw_dir / "llm_commentary.txt", "w", encoding="utf-8") as f:
-            sim_commentary = generate_sim_commentary(tickers, strategies, mc_current, mc_port_current, mc_port_rebalanced, fallback_present)
+        with open(port_sum_dir / "llm_commentary.txt", "w", encoding="utf-8") as f:
+            sim_commentary = generate_sim_commentary(tickers, strategies, mc_current, mc_port_current, mc_port_rebalanced, fallback_present, file=f)
     except Exception as e:
             errors.append(f"Sim Commentary Failed: {e}")
             sim_commentary = None

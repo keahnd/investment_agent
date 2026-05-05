@@ -624,7 +624,7 @@ def write_raw(raw_dir: Path, label: str, source: str, text: str) -> None:
     filename = f"{source}.txt"
     ticker_dir = raw_dir / label
     ticker_dir.mkdir(parents=True, exist_ok=True)
-    filepath = raw_dir / label / filename
+    filepath = ticker_dir / filename
     filepath.write_text(text, encoding="utf-8")
 
 
@@ -637,8 +637,10 @@ def write_summary(summary_dir: Path, ticker: str, text: str) -> None:
         ticker: Ticker symbol used as the filename stem.
         text: Summary text to write.
     """
-    filename = f"{ticker}_summary.txt"
-    filepath = summary_dir / filename
+    filename = f"sentiment_summary.txt"
+    ticker_dir = summary_dir / ticker
+    ticker_dir.mkdir(parents=True, exist_ok=True)
+    filepath = ticker_dir / filename
     filepath.write_text(text, encoding="utf-8")
 
 
