@@ -60,13 +60,12 @@ def build_sector_constraints(tickers, valuation, constraints):
         sector = valuation.get(ticker, {}).get("sector") or "Unknown"
         sector_mapper[ticker] = sector
     
+    sectors = set(sector_mapper.values())
     # sector_upper is the same limit applied to every sector
-    sector_upper = {
-        sector: max_sector
-        for sector in set(sector_mapper.values())
-    }
+    sector_upper = {sector: max_sector for sector in sectors}
+    sector_lower = {sector: 0.0 for sector in sectors}
     
-    return sector_mapper, sector_upper
+    return sector_mapper, sector_lower, sector_upper
 
 
 def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
@@ -89,15 +88,12 @@ def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
     min_w          = 0
     max_w          = constraints["max_allocation_per_asset"]
     
+    L = np.linalg.cholesky(sigma)
     w = cp.Variable(n)
-    
-    # Portfolio variance term
+
     port_variance = cp.quad_form(w, sigma)
-    
-    # Robustness penalty — worst case return reduction
-    # sqrt(w.T @ Sigma @ w) is the portfolio volatility
-    # epsilon scales how much we penalise for estimation uncertainty
-    robustness_penalty = epsilon * cp.sqrt(port_variance)
+    # cp.norm(L.T @ w, 2) == sqrt(w.T Sigma w) but is DCP-compliant as a 2-norm
+    robustness_penalty = epsilon * cp.norm(L.T @ w, 2)
     
     # Objective: maximise risk-adjusted return minus robustness penalty
     objective = cp.Maximize(
@@ -115,7 +111,7 @@ def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
     problem = cp.Problem(objective, constraints)
     
     try:
-        problem.solve(solver=cp.ECOS, warm_start=True)
+        problem.solve(solver=cp.CLARABEL)
         
         if problem.status not in ["optimal", "optimal_inaccurate"]:
             raise ValueError(f"Solver status: {problem.status}")
@@ -145,14 +141,12 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
     cov_df     = pd.DataFrame(posterior_cov) if isinstance(posterior_cov, dict) else posterior_cov
     
     bounds  = (0, constraints["max_allocation_per_asset"])
-    sector_mapper, sector_upper = build_sector_constraints(
-        tickers, valuation, constraints
-    )
+    sector_mapper, sector_lower, sector_upper = build_sector_constraints(tickers, valuation, constraints)
     
     # ── Max Sharpe ────────────────────────────────────────────────
     try:
         ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
-        ef.add_sector_constraints(sector_mapper, sector_upper=sector_upper)
+        ef.add_sector_constraints(sector_mapper, sector_lower=sector_lower, sector_upper=sector_upper)
         ef.max_sharpe()
         results["max_sharpe"] = dict(ef.clean_weights())
     except Exception as e:
@@ -162,7 +156,7 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
     # ── Minimum Variance ─────────────────────────────────────────
     try:
         ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
-        ef.add_sector_constraints(sector_mapper, sector_upper=sector_upper)
+        ef.add_sector_constraints(sector_mapper, sector_lower=sector_lower, sector_upper=sector_upper)
         ef.min_volatility()
         results["min_variance"] = dict(ef.clean_weights())
     except Exception as e:
@@ -182,7 +176,7 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
     try:
         target = 0.08 # Default target return
         ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
-        ef.add_sector_constraints(sector_mapper, sector_upper=sector_upper)
+        ef.add_sector_constraints(sector_mapper, sector_lower=sector_lower, sector_upper=sector_upper)
         ef.efficient_return(target_return=target)
         results["target_return"] = dict(ef.clean_weights())
     except Exception as e:
@@ -477,7 +471,6 @@ def agent3_advisor(state: PipelineState) -> dict:
         for i, t in enumerate(tickers)
     ])
     omega = np.diag(omega_diag)
-    print(f"omega: {omega}")
     bl = BlackLittermanModel(
         cov_matrix   = cov_matrix,
         pi           = np.array(prior_mu),          # factor model mu as prior
@@ -500,7 +493,7 @@ def agent3_advisor(state: PipelineState) -> dict:
             print(f"posterior returns: {posterior_mu[ticker]}", file=advisor_file)
 
     recommended_weights, opt_error = run_optimisation(
-        pd.Series(state["posterior_mu"]),
+        pd.Series(posterior_mu),
         pd.DataFrame(state["covariance_matrix"]).loc[tickers, tickers],
         tickers,
         state["valuation"],
@@ -517,7 +510,7 @@ def agent3_advisor(state: PipelineState) -> dict:
         constraints         = constraints,
     )
     
-    print(f"\n  [Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
+    print(f"\n  [Agent 3] Complete. New Errors: {len(errors) - existing_errors}")
 
     return {
         "bl_views": bl_views,
@@ -525,4 +518,5 @@ def agent3_advisor(state: PipelineState) -> dict:
         "recommended_weights": recommended_weights,
         "recommendation_table": recommendation_table,
         "advisory_commentary": "[STUB] Advisory commentary not yet implemented.",
+        "errors": errors
     }

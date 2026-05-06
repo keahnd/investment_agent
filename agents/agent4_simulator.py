@@ -550,6 +550,8 @@ def agent4_simulator(state: PipelineState) -> dict:
             continue
         weights = [state["recommended_weights"][strategy][ticker] for ticker in tickers]
         with open(port_sum_dir / f"mc_{strategy}.txt", "w", encoding="utf-8") as f:
+            for row in state["recommendation_table"]:
+                print(row, file=f)
             mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights, file=f)
     
     
