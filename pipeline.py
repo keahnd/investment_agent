@@ -3,12 +3,15 @@ Portfolio Pipeline — Main Entry Point
 """
 
 import csv
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from dotenv import load_dotenv
 import yfinance as yf
 
 from agents.graph import pipeline_graph
+from database.schema     import init_database
+from database.reconciler import reconcile_virtual_portfolio
+from database.persist    import persist_to_database
 
 load_dotenv()
 
@@ -29,11 +32,12 @@ def fetch_usd_cad_rate() -> float:
     return 1.36
 
 
-def load_tickers(user_path: Path, usd_cad_rate: float) -> list[str]:
+def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 	tickers = []
 	weights = {}
 	total_value_cad = 0
 	rows = []
+	portfolio_rows = {}
 
 	with open(user_path / "portfolio.csv", newline="") as f:
 		reader = csv.DictReader(f)
@@ -53,10 +57,20 @@ def load_tickers(user_path: Path, usd_cad_rate: float) -> list[str]:
 			rows.append((sym, market_value))
 			total_value_cad += market_value
 
+			portfolio_rows.append({
+				"ticker":        sym,
+				"shares":        float(row["Quantity"]),
+				"avg_cost":      float(row["Book Value (CAD)"])/float(row["Quantity"]),
+				"market_value":  market_value,
+				"type":          row.get("Security Type", "EQUITY"),
+				"currency":      "CAD",
+				"current_price": None,   # not in CSV, filled by Agent 2 if needed
+			})
+
 	for sym, market_value in rows:
 		weights[sym] = round(market_value / total_value_cad, 6)
 
-	return tickers, weights, total_value_cad
+	return tickers, weights, total_value_cad, portfolio_rows
 
 
 def run_user(user_path: Path) -> None:
@@ -64,10 +78,24 @@ def run_user(user_path: Path) -> None:
 	print(f"\n{'='*60}")
 	print(f"  Running pipeline for: {user_name}")
 	print(f"{'='*60}")
- 
+
+	db_path   = user_path / "history.db"
+	today = datetime.today()
+
+	# Initialise database — creates tables if they don't exist
+	conn = init_database(user_path)
+
+	# Step 1 — look backward
+	# Reconciler needs prices — pass raw_prices if already cached
+	# or let reconciler fetch them internally
+	try:
+		reconcile_virtual_portfolio(conn, today, raw_prices=None)
+	except Exception as e:
+		print(f"  [warn] Reconciler failed: {e}")
+
 	usd_cad_rate = fetch_usd_cad_rate()
 
-	tickers, weights, total_value = load_tickers(user_path, usd_cad_rate)
+	tickers, weights, total_value, portfolio_rows = load_portfolio(user_path, usd_cad_rate)
 	print(f"Total port value = {total_value}")
 
 	initial_state = {
@@ -79,6 +107,7 @@ def run_user(user_path: Path) -> None:
 		"current_weights":  weights,
 		"cad_usd_rate":		usd_cad_rate,
 		"total_portfolio_value": total_value,
+		"portfolio_rows": portfolio_rows,
 
 		# All agent outputs start as None
 		"raw_text":             None,
@@ -114,11 +143,16 @@ def run_user(user_path: Path) -> None:
 	print(f"  Agent 1 summaries populated: {final_state['summaries'] is not None}")
 	print(f"  Agent 3 commentary populated: {final_state['advisory_commentary'] is not None}")
 
-    # Print results
+	# Print results
 	print(f"\n  Done. Errors: {final_state['errors']}")
-	print(f"\n  Recommendation table:")
-	for row in final_state["recommendation_table"]:
-		print(f" {row}")
+ 
+	# Step 3 — persist
+	db_errors = persist_to_database(final_state, conn)
+	if db_errors:
+		for e in db_errors:
+			print(f"  [db error] {e}")
+   
+	conn.close()
 
 
 def main():

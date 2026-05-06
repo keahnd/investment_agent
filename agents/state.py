@@ -12,13 +12,14 @@ class PipelineState(TypedDict):
     """
 
     # ── Run metadata (set at initialisation, never changed) ──────
-    user_name:   str
-    user_path:   str        # absolute path to this user's folder
-    run_date:    str        # ISO format: "2025-04-21"
-    tickers:     list[str]  # from portfolio.csv
-    current_weights:   Optional[dict]  # {ticker: weight} computed from portfolio.csv
-    cad_usd_rate:      Optional[float] # Current USD-CAD exchange rate
-    total_portfolio_value: Optional[float] # Current portfolio value
+    user_name:              str
+    user_path:              str        # absolute path to this user's folder
+    run_date:               str        # ISO format: "2025-04-21"
+    tickers:                list[str]  # from portfolio.csv
+    current_weights:        Optional[dict]  # {ticker: weight} computed from portfolio.csv
+    cad_usd_rate:           Optional[float] # Current USD-CAD exchange rate
+    total_portfolio_value:  Optional[float] # Current portfolio value
+    portfolio_rows:         Optional[list]
     
 
     # ── Agent 1 outputs ──────────────────────────────────────────

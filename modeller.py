@@ -31,7 +31,7 @@ import json
 import traceback
 from pathlib import Path
 from curl_cffi import requests
-from database.db import init_database, insert_portfolio_row, insert_model_output, insert_recommendation, insert_virtual_portfolio
+from database.schema import init_database, insert_portfolio_row, insert_model_output, insert_recommendation, insert_virtual_portfolio
 
 np.random.seed(42)
 

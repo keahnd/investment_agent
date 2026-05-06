@@ -473,6 +473,8 @@ def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
                 'analyst_rec': {1: 'Strong Buy', 2: 'Buy', 3: 'Hold', 4: 'Underperform', 5: 'Sell'}.get(
                     round(info.get('recommendationMean') or 0) or None
                 ),
+                'earnings_growth': info.get('earningsGrowth'),
+                'revenue_growth': info.get('revenueGrowth'),
                 '200MA': info.get('twoHundredDayAverage'),
                 '50MA': info.get('fiftyDayAverage'),
                 'sector': info.get('sector'),

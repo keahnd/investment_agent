@@ -2,18 +2,18 @@ import sqlite3
 from pathlib import Path
 
 def init_database(user_path):
-    """
-    Initialises the SQLite database and creates all tables if they don't exist.
+	"""
+	Initialises the SQLite database and creates all tables if they don't exist.
 
-    Args:
-        user_path: Path to the user's directory where history.db will be created
-    Returns:
-        Active database connection
-    """
-    db_path = user_path / "history.db"
-    con = sqlite3.connect(db_path)
-    cursor = con.cursor()
-    cursor.execute("""
+	Args:
+		user_path: Path to the user's directory where history.db will be created
+	Returns:
+		Active database connection
+	"""
+	db_path = user_path / "history.db"
+	con = sqlite3.connect(db_path)
+	cursor = con.cursor()
+	cursor.execute("""
 				CREATE TABLE IF NOT EXISTS portfolios (
 					date			TEXT NOT NULL,
 					ticker 			TEXT NOT NULL,
@@ -25,7 +25,7 @@ def init_database(user_path):
 					weight 			REAL,
 					PRIMARY KEY (date, ticker)
 				)""")
-    cursor.execute("""
+	cursor.execute("""
 				CREATE TABLE IF NOT EXISTS recommendations (
 					date                TEXT NOT NULL,
 					ticker              TEXT NOT NULL,
@@ -37,7 +37,7 @@ def init_database(user_path):
 					sigma_annual        REAL,
 					PRIMARY KEY (date, ticker, strategy)
 				)""")
-    cursor.execute("""
+	cursor.execute("""
 				CREATE TABLE IF NOT EXISTS model_outputs (
 					date                TEXT NOT NULL,
 					ticker              TEXT NOT NULL,
@@ -71,7 +71,7 @@ def init_database(user_path):
 					ttm_pe              REAL,
 					peg_ratio           REAL,
 					ev_ebitda           REAL,
-     				target_price		REAL,
+					target_price		REAL,
 					analyst_rec			TEXT,
 					ma_200				REAL,
 					ma_50				REAL,
@@ -83,7 +83,7 @@ def init_database(user_path):
 					cape                REAL,
 					PRIMARY KEY (date, ticker)
 				)""")
-    cursor.execute("""
+	cursor.execute("""
 				CREATE TABLE IF NOT EXISTS virtual_portfolio (
 					date            TEXT NOT NULL,
 					ticker          TEXT NOT NULL,
@@ -96,8 +96,38 @@ def init_database(user_path):
 					PRIMARY KEY (date, ticker, strategy)
 				)""")
     
-    con.commit()
-    return con
+	cursor.execute("""
+		CREATE TABLE IF NOT EXISTS bl_views (
+			date                TEXT NOT NULL,
+			ticker              TEXT NOT NULL,
+			view_return         REAL,
+			confidence          INTEGER,
+			sentiment_direction TEXT,
+			valuation_signal    TEXT,
+			conflict            INTEGER,
+			reasoning           TEXT,
+			posterior_mu        REAL,
+			PRIMARY KEY (date, ticker)
+		)""")
+
+	cursor.execute("""
+		CREATE TABLE IF NOT EXISTS portfolio_simulations (
+			date            TEXT NOT NULL,
+			strategy        TEXT NOT NULL,
+			p05             REAL,
+			p25             REAL,
+			p50             REAL,
+			p75             REAL,
+			p95             REAL,
+			var_95          REAL,
+			cvar_95         REAL,
+			prob_loss       REAL,
+			expected_value  REAL,
+			PRIMARY KEY (date, strategy)
+		)""")
+
+	con.commit()
+	return con
 
 def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
                         	current_price, market_value, weight):
