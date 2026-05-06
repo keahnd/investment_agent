@@ -19,7 +19,6 @@ class PipelineState(TypedDict):
     current_weights:   Optional[dict]  # {ticker: weight} computed from portfolio.csv
     cad_usd_rate:      Optional[float] # Current USD-CAD exchange rate
     total_portfolio_value: Optional[float] # Current portfolio value
-    strategies:        Optional[list] # Rebalancing strategies
     
 
     # ── Agent 1 outputs ──────────────────────────────────────────
@@ -43,15 +42,15 @@ class PipelineState(TypedDict):
     # ── Agent 3 outputs ──────────────────────────────────────────
     bl_views:              Optional[dict]  # {ticker: {view_return, confidence, reasoning}}
     posterior_mu:          Optional[dict]  # {ticker: bl_adjusted_mu}
-    recommended_weights:   Optional[dict]  # {ticker: weight}
+    recommended_weights:   Optional[dict]  # {strategy: {ticker: weight}}
     recommendation_table:  Optional[list]  # list of dicts for report rendering
-    advisory_commentary:   Optional[str]
 
     # ── Agent 4 outputs ──────────────────────────────────────────
-    mc_current:       Optional[dict]  # Monte Carlo stats per-ticker
-    mc_port_current:  Optional[dict]  # Monte Carlo stats for current weights
-    mc_port_rebalanced:    Optional[dict]  # Monte Carlo stats for suggested weights
-    sim_commentary:  Optional[str]
+    mc_current:             Optional[dict]  # Monte Carlo stats per-ticker
+    mc_port_current:        Optional[dict]  # Monte Carlo stats for current weights
+    mc_port_rebalanced:     Optional[dict]  # Monte Carlo stats for suggested weights
+    sim_commentary:         Optional[str]
+    advisory_commentary:    Optional[str]
 
     # ── Pipeline metadata ────────────────────────────────────────
     errors:       Optional[list]   # non-fatal errors accumulate here

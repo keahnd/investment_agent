@@ -78,7 +78,6 @@ def run_user(user_path: Path) -> None:
 		"current_weights":  weights,
 		"cad_usd_rate":		usd_cad_rate,
 		"total_portfolio_value": total_value,
-		"strategies":		["equal_weight"],
 
 		# All agent outputs start as None
 		"raw_text":             None,
@@ -118,7 +117,7 @@ def run_user(user_path: Path) -> None:
 	print(f"\n  Done. Errors: {final_state['errors']}")
 	print(f"\n  Recommendation table:")
 	for row in final_state["recommendation_table"]:
-		print(f"    {row['ticker']:<8} → {row['recommended_weight']:.2%}  ({row['action']})")
+		print(f" {row}")
 
 
 def main():

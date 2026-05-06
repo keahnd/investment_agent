@@ -195,13 +195,6 @@ def port_monte_carlo(mu: np.ndarray, covar_ann: np.ndarray, init_port_value: flo
     }
 
 
-def get_rebalanced_weights(tickers):
-    """
-    STUB for now
-    """
-    return [1/len(tickers)] * len(tickers)
-
-
 def _fmt(val: float | None, spec: str) -> str:
     return format(val, spec) if val is not None else "N/A"
 
@@ -304,6 +297,200 @@ def generate_sim_commentary(
         print(f"    [warn] LLM commentary failed: {e}")
         return "Simulation commentary unavailable this run."
     
+    
+def build_advisory_prompt(
+        tickers: list,
+        recommendation_table: list,
+        bl_views: dict,
+        quant_commentary: str,
+        risk_commentary: str,
+        mc_portfolio_current: dict,
+        mc_portfolio_recommended: dict,
+        aaii_sentiment: dict,
+        fear_greed: dict,
+        cape: float,
+        total_portfolio_value: float,
+    ) -> str:
+
+    # ── Recommendation table block ────────────────────────────────
+    rec_lines = []
+    for row in recommendation_table:
+        rec_lines.append(
+            f"{row['ticker']}: "
+            f"current={row['current_weight']:.1%}  "
+            f"consensus={row['consensus_action']}  "
+            f"view_return={row['view_return']:+.1%}  "
+            f"confidence={row['confidence']}  "
+            f"conflict={row['conflict']}  "
+            f"reasoning={row['reasoning']}"
+        )
+
+    # ── Strategy weight comparison block ─────────────────────────
+    strategies = [s for s in mc_portfolio_recommended.keys()] if mc_portfolio_recommended else []
+    weight_lines = []
+    for row in recommendation_table:
+        ticker = row["ticker"]
+        parts  = [f"current={row['current_weight']:.1%}"]
+        for s in strategies:
+            w      = row.get(f"{s}_weight", 0)
+            action = row.get(f"{s}_action", "N/A")
+            parts.append(f"{s}={w:.1%}({action})")
+        weight_lines.append(f"{ticker}: " + "  ".join(parts))
+
+    # ── Simulation comparison block ───────────────────────────────
+    sim_lines = []
+
+    curr = mc_portfolio_current or {}
+    sim_lines.append(
+        f"Current portfolio:"
+        f"  median_value=${curr.get('p50', 0):,.0f}CAD"
+        f"  VaR95=${curr.get('var_95', 0):,.0f}CAD"
+        f"  CVaR95=${curr.get('cvar_95', 0):,.0f}CAD"
+        f"  prob_loss={curr.get('prob_loss', 0):.1%}"
+        f"  expected_value=${curr.get('expected_value', 0):,.0f}CAD"
+    )
+
+    for strategy, sim in (mc_portfolio_recommended or {}).items():
+        if sim:
+            sim_lines.append(
+                f"{strategy}:"
+                f"  median_value=${sim.get('p50', 0):,.0f}CAD"
+                f"  VaR95=${sim.get('var_95', 0):,.0f}CAD"
+                f"  CVaR95=${sim.get('cvar_95', 0):,.0f}CAD"
+                f"  prob_loss={sim.get('prob_loss', 0):.1%}"
+                f"  expected_value=${sim.get('expected_value', 0):,.0f}CAD"
+            )
+
+    # ── Strategy disagreement detection ──────────────────────────
+    disagreement_lines = []
+    for row in recommendation_table:
+        ticker  = row["ticker"]
+        actions = [row.get(f"{s}_action", "HOLD") for s in strategies]
+        unique  = set(actions)
+        if len(unique) > 1:
+            action_summary = "  ".join(
+                f"{s}={row.get(f'{s}_action', 'N/A')}"
+                for s in strategies
+            )
+            disagreement_lines.append(f"{ticker}: {action_summary}")
+
+    disagreement_block = (
+        "STRATEGY DISAGREEMENTS:\n" + "\n".join(disagreement_lines)
+        if disagreement_lines
+        else "All strategies are in consensus on all positions."
+    )
+
+    prompt = f"""You are a portfolio manager writing a weekly briefing for a long-term investor.
+Total portfolio value: ${total_portfolio_value:,.0f} CAD
+
+MACRO CONTEXT:
+  Shiller CAPE         : {cape}
+  CNN Fear & Greed     : {fear_greed.get('score')} ({fear_greed.get('rating')})
+  AAII Bullish         : {aaii_sentiment.get('bullish')}
+  AAII Bearish         : {aaii_sentiment.get('bearish')}
+  AAII Neutral         : {aaii_sentiment.get('neutral')}
+  AAII Bull-Bear Spread: {aaii_sentiment.get('bull_bear_spread')}
+
+PORTFOLIO RECOMMENDATIONS:
+{chr(10).join(rec_lines)}
+
+STRATEGY WEIGHT COMPARISON:
+{chr(10).join(weight_lines)}
+
+{disagreement_block}
+
+SIMULATION RESULTS:
+{chr(10).join(sim_lines)}
+
+RISK COMMENTARY:
+{risk_commentary}
+
+QUANTITATIVE MODEL COMMENTARY:
+{quant_commentary}
+
+Write a unified portfolio briefing of 4-6 paragraphs covering:
+
+1. Macro environment — what the CAPE, Fear & Greed, and AAII readings mean 
+   for the portfolio right now. If CAPE is above 30 address valuation risk 
+   explicitly. If Fear & Greed is below 25 or above 75 note the contrarian signal.
+
+2. Key BUY and SELL recommendations — for every position where consensus action 
+   is BUY or SELL explain specifically what drove it. Name the metrics, name the 
+   sentiment signals, name the sources that supported the view.
+
+3. Sentiment vs fundamentals conflicts — for every position where conflict=True 
+   explain the tension explicitly. A cheap stock with negative sentiment is a 
+   different situation from a cheap stock with improving sentiment. Say which 
+   it is and what would resolve the conflict.
+
+4. Strategy disagreements — for every position where strategies disagree 
+   explain why they diverge. Name the strategies on each side. Note whether 
+   the disagreement reflects genuine uncertainty or a known model difference 
+   such as risk parity ignoring return estimates.
+
+5. Risk and simulation context — reference the VaR and CVaR numbers in dollar 
+   terms. Compare the current portfolio simulation to the recommended strategy 
+   simulations. Recommend which single strategy you find most compelling given 
+   the current macro environment and simulation outcomes — give a specific 
+   reason not just the best expected return.
+
+Rules:
+- Be specific — name metrics, name values, name tickers
+- Never say "consider" or "may want to" — give a clear view
+- Do not restate numbers already visible in the tables — interpret what they mean
+- Write for an investor reading this at 7am on Monday morning
+- 4-6 paragraphs, 4-6 sentences each
+- Plain prose only — no headers, no bullet points, no markdown
+
+Return only the commentary text."""
+
+    return prompt
+
+
+def generate_advisory_commentary(
+        tickers: list,
+        recommendation_table: list,
+        bl_views: dict,
+        quant_commentary: str,
+        risk_commentary: str,
+        mc_portfolio_current: dict,
+        mc_portfolio_recommended: dict,
+        aaii_sentiment: dict,
+        fear_greed: dict,
+        cape: float,
+        total_portfolio_value: float,
+    ) -> str:
+    """
+    Final LLM call in the pipeline. Produces the advisory commentary
+    that appears as the main prose section of the weekly report.
+    Temperature 0.3 — this is prose the user reads, not structured data.
+    """
+    prompt = build_advisory_prompt(
+        tickers                  = tickers,
+        recommendation_table     = recommendation_table,
+        bl_views                 = bl_views,
+        quant_commentary         = quant_commentary,
+        risk_commentary          = risk_commentary,
+        mc_portfolio_current     = mc_portfolio_current,
+        mc_portfolio_recommended = mc_portfolio_recommended,
+        aaii_sentiment           = aaii_sentiment,
+        fear_greed               = fear_greed,
+        cape                     = cape,
+        total_portfolio_value    = total_portfolio_value,
+    )
+
+    try:
+        llm      = get_llm(0.3)
+        response = llm.invoke(prompt)
+        return response.content.strip()
+
+    except Exception as e:
+        print(f"    [warn] Advisory commentary LLM call failed: {e}")
+        return (
+            "Advisory commentary unavailable this run. "
+            "Review the recommendation table and simulation results directly."
+        )
+    
 
 
 def agent4_simulator(state: PipelineState) -> dict:
@@ -328,7 +515,7 @@ def agent4_simulator(state: PipelineState) -> dict:
     Sigma = covar.values * 252
     curr_weights = [state["current_weights"][t] for t in tickers]
     total_value = state["total_portfolio_value"]
-    strategies = state["strategies"]
+    strategies = list(state["recommended_weights"].keys())
     port_info = state["mu_sigma"]
     mu_vec = get_mu_for_tickers(tickers, state)
     fallback_present = {t: port_info[t]["is_fallback"] for t in tickers}
@@ -344,7 +531,7 @@ def agent4_simulator(state: PipelineState) -> dict:
         state_info = port_info[ticker]
         dir_name = ticker.removesuffix(".TO")
         (sum_dir / dir_name).mkdir(parents=True, exist_ok=True)
-        with open(sum_dir / dir_name / "quant.txt", "w", encoding="utf-8") as f:
+        with open(sum_dir / dir_name / "sim.txt", "w", encoding="utf-8") as f:
             mc_current[ticker] = run_monte_carlo(
                 state_info["mu_annual"], state_info["sigma_annual"], state_info["s_current"], file=f
             )
@@ -358,7 +545,10 @@ def agent4_simulator(state: PipelineState) -> dict:
 
     for strategy in strategies:
         print(f"\nMonte Carlo Sim: Rebalanced ({strategy})")
-        weights = get_rebalanced_weights(tickers)
+        if state["recommended_weights"].get(strategy) is None:
+            print(f"Recommendation failed for {strategy}")
+            continue
+        weights = [state["recommended_weights"][strategy][ticker] for ticker in tickers]
         with open(port_sum_dir / f"mc_{strategy}.txt", "w", encoding="utf-8") as f:
             mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights, file=f)
     
@@ -371,11 +561,26 @@ def agent4_simulator(state: PipelineState) -> dict:
             sim_commentary = None
             
     print(f"\n  [Agent 4] Complete. New Errors: {len(errors) - existing_errors}")
+    
+    advisory_commentary = generate_advisory_commentary(
+        tickers                  = state["tickers"],
+        recommendation_table     = state["recommendation_table"],
+        bl_views                 = state["bl_views"],
+        quant_commentary         = state["quant_commentary"],
+        risk_commentary          = sim_commentary,
+        mc_portfolio_current     = mc_port_current,
+        mc_portfolio_recommended = mc_port_rebalanced,
+        aaii_sentiment           = state["aaii_sentiment"] or {},
+        fear_greed               = state["fear_greed"] or {},
+        cape                     = state.get("cape") or 25.0,
+        total_portfolio_value    = state["total_portfolio_value"],
+    )
 
     return {
         "mc_current":     mc_current,
         "mc_port_current": mc_port_current,
         "mc_port_rebalanced":  mc_port_rebalanced,
         "sim_commentary": sim_commentary,
+        "advisory_commentary" : advisory_commentary,
         "errors": errors,
     }

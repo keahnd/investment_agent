@@ -453,6 +453,7 @@ def agent3_advisor(state: PipelineState) -> dict:
     tickers   = state["tickers"]
     run_date  = state["run_date"]
     errors    = list(state.get("errors") or [])
+    existing_errors = len(errors)
     prior_mu = [state["mu_sigma"][t]["mu_annual"] for t in tickers]
     cov_df = pd.DataFrame(state["covariance_matrix"])
     cov_matrix = cov_df.loc[tickers, tickers]
@@ -515,6 +516,8 @@ def agent3_advisor(state: PipelineState) -> dict:
         bl_views            = bl_views,
         constraints         = constraints,
     )
+    
+    print(f"\n  [Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
 
     return {
         "bl_views": bl_views,
