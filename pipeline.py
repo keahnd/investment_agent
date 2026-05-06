@@ -43,8 +43,8 @@ def load_tickers(user_path: Path, usd_cad_rate: float) -> list[str]:
 			if exchange == "TSX":
 				sym += ".TO"
 			tickers.append(sym)
-			market_value = float(row["Market Price"])
-			currency = row.get("Market Price Currency", "CAD").strip().upper()
+			market_value = float(row["Market Value"])
+			currency = row.get("Market Value Currency", "CAD").strip().upper()
 
 			# Convert to CAD
 			if currency == "USD":
@@ -68,6 +68,7 @@ def run_user(user_path: Path) -> None:
 	usd_cad_rate = fetch_usd_cad_rate()
 
 	tickers, weights, total_value = load_tickers(user_path, usd_cad_rate)
+	print(f"Total port value = {total_value}")
 
 	initial_state = {
 		# Run metadata

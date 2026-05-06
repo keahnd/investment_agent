@@ -82,6 +82,7 @@ def run_monte_carlo(mu: float, sigma: float, S0: float, file=None):
     CVaR_95 = losses[losses >= np.percentile(losses, 95, method='lower')].mean()
 
     print(f"\n  ── Terminal Price Distribution (S_T) ──", file=file)
+    print(f"  Current Price       : {S_current:.2f}", file=file)
     print(f"  E[S_T]              : {E_ST:.2f}", file=file)
     print(f"  Median              : {pct[3]:.2f}", file=file)
     print(f"  Std dev             : {S_T.std():.2f}", file=file)
@@ -166,6 +167,7 @@ def port_monte_carlo(mu: np.ndarray, covar_ann: np.ndarray, init_port_value: flo
     CVaR_95 = losses[losses >= np.percentile(losses, 95, method='lower')].mean()
 
     print(f"\n  ── Terminal Price Distribution (S_T) ──", file=file)
+    print(f"  Current Price       : {init_port_value:.2f}", file=file)
     print(f"  E[S_T]              : {E_ST:.2f}", file=file)
     print(f"  Median              : {pct[3]:.2f}", file=file)
     print(f"  Std dev             : {S_T.std():.2f}", file=file)
