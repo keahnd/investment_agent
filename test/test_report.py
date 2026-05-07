@@ -1,10 +1,21 @@
-from fpdf import FPDF
+import sys
+from pathlib import Path
 
-pdf = FPDF()
-pdf.add_page()
-pdf.set_font("Helvetica", size=16)
-pdf.cell(0, 10, "Test Report", ln=True)
-pdf.set_font("Helvetica", size=12)
-pdf.cell(0, 10, "If this renders, fpdf2 is working.", ln=True)
-pdf.output("test_output.pdf")
-print("PDF generated successfully")
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import json
+from pathlib import Path
+from reports.charts import generate_all_charts
+from reports.report import generate_report
+
+with open("test/fixtures/sample_state.json") as f:
+    state = json.load(f)
+
+# Generate charts first
+charts_dir  = Path("test/output/charts")
+chart_paths = generate_all_charts(state, charts_dir)
+
+# Generate report
+user_path = Path("test/output")
+pdf_path  = generate_report(state, user_path, charts_dir)
+print(f"\nReport generated: {pdf_path}")

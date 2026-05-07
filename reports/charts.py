@@ -181,7 +181,6 @@ def generate_all_charts(state: dict, charts_dir: Path) -> dict:
 	Returns {chart_name: file_path} dict for HTML embedding.
 	"""
 	charts_dir.mkdir(parents=True, exist_ok=True)
-	chart_paths = {}
 	tickers     = state["tickers"]
 	print(f"      Generating {len(tickers)} ticker charts...")
  
