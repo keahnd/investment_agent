@@ -20,7 +20,7 @@ def init_database(user_path):
 					quantity		REAL,
 					avg_cost		REAL,
 					asset_class 	TEXT,
-					current_price	REAL,
+					market_price	REAL,
 					market_value 	REAL,
 					weight 			REAL,
 					PRIMARY KEY (date, ticker)
@@ -59,13 +59,14 @@ def init_database(user_path):
 					mu_annual           REAL,
 					sigma_annual        REAL,
 					
-					mc_p05              REAL,
+					estimated_price     REAL,
+					prob_up				REAL,
 					mc_p25              REAL,
 					mc_p50              REAL,
 					mc_p75              REAL,
-					mc_p95              REAL,
+					mc_p95				REAL,
 					mc_var95            REAL,
-					mc_cvar95           REAL,
+					mc_cvar_95            REAL,
 					
 					forward_pe          REAL,
 					ttm_pe              REAL,
@@ -112,16 +113,15 @@ def init_database(user_path):
 
 	cursor.execute("""
 		CREATE TABLE IF NOT EXISTS portfolio_simulations (
-			date            TEXT NOT NULL,
-			strategy        TEXT NOT NULL,
-			p05             REAL,
-			p25             REAL,
-			p50             REAL,
-			p75             REAL,
-			p95             REAL,
-			var_95          REAL,
-			cvar_95         REAL,
-			prob_loss       REAL,
+			date			TEXT NOT NULL, 
+   			strategy		TEXT NOT NULL, 
+      		p25				REAL, 
+        	p50				REAL, 
+         	p75				REAL,
+			p95				REAL,
+			var_95			REAL, 
+   			cvar_95			REAL, 
+      		prob_up			REAL, 
 			expected_value  REAL,
 			PRIMARY KEY (date, strategy)
 		)""")
@@ -130,7 +130,7 @@ def init_database(user_path):
 	return con
 
 def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
-                        	current_price, market_value, weight):
+                        	market_price, market_value, weight):
     """
     Inserts or replaces a single row in the portfolios table.
 
@@ -141,18 +141,18 @@ def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
         quantity: Number of shares held
         avg_cost: Average cost per share
         asset_class: Asset class label (e.g. 'Equity', 'Fixed Income')
-        current_price: Latest market price
-        market_value: Total market value (quantity * current_price)
+        market_price: Latest market price
+        market_value: Total market value (quantity * market_price)
         weight: Portfolio weight (0–1)
     """
     # OR REPLACE IS FOR TESTING
     conn.execute("""
 		INSERT OR REPLACE INTO portfolios						
 			(date, ticker, quantity, avg_cost, asset_class,
-			current_price, market_value, weight)
+			market_price, market_value, weight)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		""", (date, ticker, quantity, avg_cost, asset_class,
-				current_price, market_value, weight))
+				market_price, market_value, weight))
     
     conn.commit()
     
@@ -172,13 +172,13 @@ def insert_model_output(conn, date, ticker, params: dict):
 		INSERT OR REPLACE INTO model_outputs (date, ticker, alpha_daily, beta_mkt, beta_smb,
 			beta_hml, r_squared, alpha_pval, garch_omega, garch_alpha, garch_beta,
 			garch_persistence, garch_longrun_vol, garch_current_vol, mu_annual,
-			sigma_annual, mc_p05, mc_p25, mc_p50, mc_p75, mc_p95, mc_var95, mc_cvar95,
+			sigma_annual, estimated_price, prob_up, mc_p25, mc_p50, mc_p75, mc_p95, mc_var95, mc_cvar_95,
 			forward_pe, ttm_pe, peg_ratio, ev_ebitda, target_price,	analyst_rec, ma_200,
 			ma_50, earnings_growth, revenue_growth, sector, industry, cape)
 		VALUES (:date, :ticker, :alpha_daily, :beta_mkt, :beta_smb,
 			:beta_hml, :r_squared, :alpha_pval, :garch_omega, :garch_alpha, :garch_beta,
 			:garch_persistence, :garch_longrun_vol, :garch_current_vol, :mu_annual,
-			:sigma_annual, :mc_p05, :mc_p25, :mc_p50, :mc_p75, :mc_p95, :mc_var95, :mc_cvar95,
+			:sigma_annual, :estimated_price, :prob_up, :mc_p25, :mc_p50, :mc_p75, :mc_p95, :mc_var95, :mc_cvar_95,
 			:forward_pe, :ttm_pe, :peg_ratio, :ev_ebitda, :target_price,	:analyst_rec, :ma_200,
 			:ma_50, :earnings_growth, :revenue_growth, :sector, :industry, :cape)
 	""", {"date": date, "ticker": ticker, **params})

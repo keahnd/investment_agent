@@ -78,7 +78,7 @@ def _write_portfolios(state, conn, date):
             quantity     = row["shares"],
             avg_cost     = row["avg_cost"],
             asset_class  = row["type"],
-            current_price= row.get("current_price"),
+            market_price = row.get("market_price"),
             market_value = row["market_value"],
             weight       = state["current_weights"].get(row["ticker"], 0.0),
         )
@@ -104,9 +104,9 @@ def _write_model_outputs(state, conn, date):
         params = {
             # Factor model
             "alpha_daily":       fr.get("alpha_daily"),
-            "beta_mkt":          fr.get("b_mkt"),
-            "beta_smb":          fr.get("b_smb"),
-            "beta_hml":          fr.get("b_hml"),
+            "beta_mkt":          fr.get("b_MKT"),
+            "beta_smb":          fr.get("b_SMB"),
+            "beta_hml":          fr.get("b_HML"),
             "r_squared":         fr.get("r2"),
             "alpha_pval":        fr.get("p_val_alpha"),
 
@@ -123,13 +123,14 @@ def _write_model_outputs(state, conn, date):
             "sigma_annual":      ms.get("sigma_annual"),
 
             # Per-ticker Monte Carlo
-            "mc_p05":            mc.get("p5"),
-            "mc_p25":            mc.get("p25"),
-            "mc_p50":            mc.get("p50"),
-            "mc_p75":            mc.get("p75"),
-            "mc_p95":            mc.get("p95"),
-            "mc_var95":          mc.get("var_95"),
-            "mc_cvar95":         mc.get("cvar_95"),
+            "estimated_price":   mc.get("E_ST"),
+            "prob_up":			 mc.get("prob_up"),
+            "mc_p25":            mc.get("pct")[2],
+            "mc_p50":            mc.get("pct")[3],
+            "mc_p75":            mc.get("pct")[4],
+            "mc_p95":			 mc.get("pct")[5],	
+            "mc_var95":          mc.get("VaR_95"),
+            "mc_cvar_95":          mc.get("CVaR_95"),
 
             # Valuation
             "forward_pe":        val.get("fwd_pe"),
@@ -217,7 +218,7 @@ def _write_simulations(state, conn, date):
     if curr:
         conn.execute("""
             INSERT OR REPLACE INTO portfolio_simulations
-                (date, strategy, p05, p25, p50, p75, p95,
+                (date, strategy, p25, p50, p75, p95,
                  var_95, cvar_95, prob_loss, expected_value)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -233,13 +234,12 @@ def _write_simulations(state, conn, date):
         if sim:
             conn.execute("""
                 INSERT OR REPLACE INTO portfolio_simulations
-                    (date, strategy, p05, p25, p50, p75, p95,
-                     var_95, cvar_95, prob_loss, expected_value)
+                    (date, strategy, p25, p50, p75, p95,
+                     var_95, cvar_95, prob_up, expected_value)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 date, strategy,
-                sim.get("p5"),  sim.get("p25"), sim.get("p50"),
-                sim.get("p75"), sim.get("p95"),
-                sim.get("var_95"), sim.get("cvar_95"),
-                sim.get("prob_loss"), sim.get("expected_value")
+                sim.get("pct")[2],  sim.get("pct")[3], sim.get("pct")[4],
+                sim.get("pct")[5],  sim.get("VaR_95"), sim.get("CVaR_95"),
+                sim.get("prob_up"), sim.get("E_ST")
             ))

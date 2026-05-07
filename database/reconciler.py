@@ -4,6 +4,8 @@ import requests, zipfile, io
 import time
 import yfinance as yf
 
+from agents.agent2_quant import fetch_prices
+
 
 TODAY = datetime.today()
 
@@ -275,7 +277,7 @@ def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
     print(f"\n{'='*70}", file=file)
 
 
-def reconcile_virtual_portfolio(conn, today, raw_prices, file=None):
+def reconcile_virtual_portfolio(conn, today, file=None):
     """
     Tracks a virtual portfolio based on the most recent recommendations.
     Executes trades at the opening price of the next trading day and compares
@@ -284,7 +286,6 @@ def reconcile_virtual_portfolio(conn, today, raw_prices, file=None):
     Args:
         conn: Active database connection
         today: Today's date string (YYYY-MM-DD)
-        raw_prices: Price DataFrame (dates x tickers) from fetch_prices
         file: File object to write output to
 
     Returns:
@@ -300,6 +301,17 @@ def reconcile_virtual_portfolio(conn, today, raw_prices, file=None):
     last_rec_date, last_vp_date, opening_date = dates
 
     last_rec, weights_by_strategy = _load_recommendations(conn, last_rec_date, file)
+    
+    portfolio_tickers = {r[0] for r in conn.execute(
+        "SELECT DISTINCT ticker FROM portfolios WHERE date = ?", (today,)
+    ).fetchall()}
+    rec_tickers = {r[0] for r in conn.execute(
+        "SELECT DISTINCT ticker FROM recommendations WHERE date = ?", (last_rec_date,)
+    ).fetchall()}
+    tickers = sorted(portfolio_tickers | rec_tickers)
+
+    raw_prices = fetch_prices(tickers, last_rec_date, today)
+    
     last_vp_values = dict(conn.execute("SELECT strategy, SUM(market_value) FROM virtual_portfolio WHERE date = ? GROUP BY strategy",
                                        (last_vp_date,)).fetchall()) if last_vp_date else {}
     last_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (last_rec_date,)).fetchone()[0]

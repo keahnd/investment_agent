@@ -739,7 +739,6 @@ def agent1_sentiment(state: PipelineState) -> dict:
     errors    = list(state.get("errors") or [])
 
     print(f"\n  [Agent 1] Sentiment Analysis running for {user_name}")
-    print(f"            Tickers : {tickers}")
 
     # Create output directories
     raw_dir     = user_path / "data" / run_date / "raw"

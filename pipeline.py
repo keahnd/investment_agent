@@ -37,7 +37,7 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 	weights = {}
 	total_value_cad = 0
 	rows = []
-	portfolio_rows = {}
+	portfolio_rows = []
 
 	with open(user_path / "portfolio.csv", newline="") as f:
 		reader = csv.DictReader(f)
@@ -49,10 +49,16 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 			tickers.append(sym)
 			market_value = float(row["Market Value"])
 			currency = row.get("Market Value Currency", "CAD").strip().upper()
-
 			# Convert to CAD
 			if currency == "USD":
 				market_value = market_value * usd_cad_rate
+
+			market_price = float(row["Market Price"])
+			price_currency = row.get("Market Price Currency", "CAD").strip().upper()
+   
+			if price_currency == "USD":
+				market_price = market_price * usd_cad_rate
+
 
 			rows.append((sym, market_value))
 			total_value_cad += market_value
@@ -64,7 +70,7 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 				"market_value":  market_value,
 				"type":          row.get("Security Type", "EQUITY"),
 				"currency":      "CAD",
-				"current_price": None,   # not in CSV, filled by Agent 2 if needed
+				"market_price": market_price,
 			})
 
 	for sym, market_value in rows:
@@ -80,7 +86,14 @@ def run_user(user_path: Path) -> None:
 	print(f"{'='*60}")
 
 	db_path   = user_path / "history.db"
-	today = datetime.today()
+	today = datetime.today().strftime("%Y-%m-%d")
+ 
+	report_dir = user_path / "reports" / f"{today}"
+	report_dir.mkdir(exist_ok=True)
+	output_path = report_dir / f"recommendation_{today}.txt"
+	vp_output = report_dir / f"virtual_portfolio_{today}.txt"
+	asset_analysis =  report_dir / "asset_analysis"
+	asset_analysis.mkdir(exist_ok=True)
 
 	# Initialise database — creates tables if they don't exist
 	conn = init_database(user_path)
@@ -89,14 +102,14 @@ def run_user(user_path: Path) -> None:
 	# Reconciler needs prices — pass raw_prices if already cached
 	# or let reconciler fetch them internally
 	try:
-		reconcile_virtual_portfolio(conn, today, raw_prices=None)
+		with open(vp_output, 'w', encoding='utf-8') as f:
+			reconcile_virtual_portfolio(conn, today, file=f)
 	except Exception as e:
 		print(f"  [warn] Reconciler failed: {e}")
 
 	usd_cad_rate = fetch_usd_cad_rate()
 
 	tickers, weights, total_value, portfolio_rows = load_portfolio(user_path, usd_cad_rate)
-	print(f"Total port value = {total_value}")
 
 	initial_state = {
 		# Run metadata
@@ -151,6 +164,18 @@ def run_user(user_path: Path) -> None:
 	if db_errors:
 		for e in db_errors:
 			print(f"  [db error] {e}")
+	
+	with open(output_path, 'w', encoding='utf-8') as f:
+		strategies = ["max_sharpe", "min_variance", "risk_parity", "target_return", "robust_mv"]
+		header = f"{'Ticker':<10} {'Current':>8} " + " ".join(f"{s[:10]:>10}" for s in strategies) + f"  {'Consensus':<10}"
+		print(f"\n  Recommendation Table", file=f)
+		print(f"  {header}", file=f)
+		print(f"  {'-' * len(header)}", file=f)
+		for row in final_state["recommendation_table"]:
+			weights = " ".join(
+				f"{row.get(f'{s}_weight', 0.0):>9.1%} " for s in strategies
+			)
+			print(f"  {row['ticker']:<10} {row['current_weight']:>8.1%} {weights} {row.get('consensus_action', 'N/A'):<10}", file=f)
    
 	conn.close()
 
