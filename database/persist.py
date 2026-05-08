@@ -219,14 +219,13 @@ def _write_simulations(state, conn, date):
         conn.execute("""
             INSERT OR REPLACE INTO portfolio_simulations
                 (date, strategy, p25, p50, p75, p95,
-                 var_95, cvar_95, prob_loss, expected_value)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 var_95, cvar_95, prob_up, expected_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             date, "current",
-            curr.get("p5"),  curr.get("p25"), curr.get("p50"),
-            curr.get("p75"), curr.get("p95"),
-            curr.get("var_95"), curr.get("cvar_95"),
-            curr.get("prob_loss"), curr.get("expected_value")
+            curr.get("pct")[2],  curr.get("pct")[3], curr.get("pct")[4],
+			curr.get("pct")[5],  curr.get("VaR_95"), curr.get("CVaR_95"),
+			curr.get("prob_up"), curr.get("E_ST")
         ))
 
     # Per-strategy recommended portfolio simulations
@@ -236,7 +235,7 @@ def _write_simulations(state, conn, date):
                 INSERT OR REPLACE INTO portfolio_simulations
                     (date, strategy, p25, p50, p75, p95,
                      var_95, cvar_95, prob_up, expected_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 date, strategy,
                 sim.get("pct")[2],  sim.get("pct")[3], sim.get("pct")[4],

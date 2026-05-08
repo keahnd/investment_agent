@@ -265,7 +265,7 @@ def _section_cover(pdf: PortfolioReport, state: dict):
 
     macro_items = [
         ("Shiller CAPE",          f"{cape:.1f}",                              cape > 30),
-        ("Fear & Greed Index",    f"{fg.get('score', 'N/A')} — {fg.get('rating', 'N/A')}", False),
+        ("Fear & Greed Index",    f"{fg.get('score', 'N/A'):.2f} — {fg.get('rating', 'N/A')}", False),
         ("AAII Bullish",          aaii.get("bullish", "N/A"),                 False),
         ("AAII Bearish",          aaii.get("bearish", "N/A"),                 False),
         ("AAII Bull-Bear Spread", aaii.get("bull_bear_spread", "N/A"),        False),
@@ -286,161 +286,179 @@ def _section_cover(pdf: PortfolioReport, state: dict):
 
 
 def _section_portfolio_snapshot(pdf: PortfolioReport, state: dict):
-    """
-    Section 1 — Portfolio Snapshot.
-    Table: ticker, weight, market value, valuation metrics.
-    """
-    pdf.add_page()
-    pdf.set_bg()
-    pdf.h1("1. Portfolio Snapshot")
+	"""
+	Section 1 — Portfolio Snapshot.
+	Table: ticker, weight, market value, valuation metrics.
+	"""
+	pdf.add_page()
+	pdf.set_bg()
+	pdf.h1("1. Portfolio Snapshot")
 
-    tickers   = state["tickers"]
-    weights   = state["current_weights"]
-    valuation = state.get("valuation") or {}
-    total_val = state.get("total_portfolio_value", 0)
-    rows      = state.get("portfolio_rows") or []
-    row_map   = {r["ticker"]: r for r in rows}
+	tickers   = state["tickers"]
+	weights   = state["current_weights"]
+	valuation = state.get("valuation") or {}
+	total_val = state.get("total_portfolio_value", 0)
+	rows      = state.get("portfolio_rows") or []
+	row_map   = {r["ticker"]: r for r in rows}
 
-    # Column widths — sum to CONTENT_W (180mm)
-    cols = [
-        ("Ticker",   22),
-        ("Shares",   18),
-        ("Price",    22),
-        ("Mkt Val",  22),
-        ("Weight",   18),
-        ("Fwd P/E",  18),
-        ("PEG",      18),
-        ("EV/EBITDA",18),
-        ("Analyst",  20),
-    ]
+	# Column widths — sum to CONTENT_W (180mm)
+	cols = [
+		("Ticker",   22),
+		("Shares",   18),
+		("Price",    22),
+		("Mkt Val",  22),
+		("Weight",   18),
+		("Fwd P/E",  18),
+		("PEG",      18),
+		("EV/EBITDA",18),
+		("Analyst",  20),
+	]
 
-    pdf.table_header(cols)
+	pdf.table_header(cols)
 
-    for ticker in tickers:
-        row = row_map.get(ticker, {})
-        val = valuation.get(ticker, {})
-        w   = weights.get(ticker, 0)
+	for ticker in tickers:
+		row = row_map.get(ticker, {})
+		val = valuation.get(ticker, {})
+		w   = weights.get(ticker, 0)
 
-        pdf.set_font("Helvetica", "B", FS_SMALL)
-        pdf.set_text_color(*C_CYAN)
-        pdf.cell(22, 6, ticker, border=1)
+		pdf.set_font("Helvetica", "B", FS_SMALL)
+		pdf.set_text_color(*C_CYAN)
+		pdf.cell(22, 6, ticker, border=1)
 
-        pdf.set_font("Helvetica", "", FS_SMALL)
-        pdf.set_text_color(*C_WHITE)
-        pdf.cell(18, 6, f"{row.get('shares', 0):.0f}",     border=1, align="R")
-        pdf.cell(22, 6, f"${row.get('avg_cost', 0):.2f}",  border=1, align="R")
-        pdf.cell(22, 6, f"${row.get('market_value', 0):,.0f}", border=1, align="R")
-        pdf.cell(18, 6, f"{w:.1%}",                        border=1, align="R")
+		pdf.set_font("Helvetica", "", FS_SMALL)
+		pdf.set_text_color(*C_WHITE)
+		pdf.cell(18, 6, f"{row.get('shares', 0):.2f}",     border=1, align="R")
+		pdf.cell(22, 6, f"${row.get('avg_cost', 0):.2f}",  border=1, align="R")
+		pdf.cell(22, 6, f"${row.get('market_value', 0):,.0f}", border=1, align="R")
+		pdf.cell(18, 6, f"{w:.1%}",                        border=1, align="R")
 
-        pdf.flag_cell(val.get("fwd_pe"),   bad_below=10,  good_above=None, fmt="{:.1f}x")
-        pdf.flag_cell(val.get("peg"),      bad_below=None, good_above=None, fmt="{:.2f}")
-        pdf.flag_cell(val.get("ev_ebitda"),bad_below=None, good_above=None, fmt="{:.1f}x")
+		pdf.flag_cell(val.get("fwd_pe"),   bad_below=10,  good_above=None, fmt="{:.1f}x")
+		pdf.flag_cell(val.get("peg"),      bad_below=None, good_above=None, fmt="{:.2f}")
+		pdf.flag_cell(val.get("ev_ebitda"),bad_below=None, good_above=None, fmt="{:.1f}x")
 
-        rec = val.get("analyst_rec") or "N/A"
-        pdf.set_text_color(*C_GREEN if "Buy" in rec else C_WHITE)
-        pdf.cell(20, 6, _safe(rec[:10]), border=1, align="C")
-        pdf.set_text_color(*C_WHITE)
-        pdf.ln()
+		rec = val.get("analyst_rec") or "N/A"
+		pdf.set_text_color(*C_GREEN if "Buy" in rec else C_WHITE)
+		pdf.cell(20, 6, _safe(rec[:10]), border=1, align="C")
+		pdf.set_text_color(*C_WHITE)
+		pdf.ln()
+        
+		if pdf.get_y() > PAGE_H - 90:
+			pdf.add_page()
+			pdf.set_bg()
+			pdf.page_header_bar("1. Portfolio Snapshot (continued)")
 
-    # Total row
-    pdf.set_font("Helvetica", "B", FS_SMALL)
-    pdf.set_text_color(*C_CYAN)
-    pdf.cell(22, 6, "TOTAL", border=1)
-    pdf.cell(18 + 22, 6, "", border=1)
-    pdf.cell(22, 6, f"${total_val:,.0f}", border=1, align="R")
-    pdf.cell(18, 6, "100.0%", border=1, align="R")
-    pdf.ln(10)
+	# Total row
+	pdf.set_font("Helvetica", "B", FS_SMALL)
+	pdf.set_text_color(*C_CYAN)
+	pdf.cell(22, 6, "TOTAL", border=1)
+	pdf.cell(18 + 22, 6, "", border=1)
+	pdf.cell(22, 6, f"${total_val:,.0f}", border=1, align="R")
+	pdf.cell(18, 6, "100.0%", border=1, align="R")
+	pdf.ln(10)
 
 
-def _section_virtual_portfolio(pdf: PortfolioReport, state: dict):
+def _section_virtual_portfolio(pdf: PortfolioReport, divergence_data: dict):
     """
     Section 2 — Virtual Portfolio Divergence.
-    Placeholder if reconciler has not run yet.
+    Reads from divergence_data dict built by build_divergence_data().
+    Shows placeholder if data not available.
     """
     pdf.add_page()
     pdf.set_bg()
-    pdf.h1("6. Virtual Portfolio Divergence")
+    pdf.h1("2. Virtual Portfolio Divergence")
 
-    div = state.get("divergence_summary")
-
-    if div is None:
+    if not divergence_data:
         pdf.set_text_color(*C_GREY)
         pdf.set_font("Helvetica", "I", FS_BODY)
         pdf.multi_cell(0, 6,
             "Virtual portfolio divergence data not available. "
-            "This section will populate after the first full pipeline run "
+            "This section populates after the first full pipeline run "
             "with prior recommendations in the database."
         )
         return
 
-    # Real portfolio performance
-    rp_val = div.get("real_portfolio_value", 0)
-    rp_ret = div.get("real_portfolio_return")
+    # ── Top-line summary ──────────────────────────────────────────
+    curr_rp = divergence_data["curr_rp_value"]
+    real_ret = divergence_data.get("real_return")
 
-    pdf.kv("Real Portfolio Value",  f"${rp_val:,.2f} CAD")
-    pdf.kv("Real Portfolio Return", f"{rp_ret:+.2%}" if rp_ret else "N/A")
+    pdf.kv("Real Portfolio Value",
+           f"${curr_rp:,.2f} CAD")
+    pdf.kv("Real Portfolio Return",
+           f"{real_ret:+.2%}" if real_ret is not None else "N/A")
     pdf.ln(4)
 
-    # Per-strategy divergence table
-    strategies_div = div.get("strategies") or {}
-    if strategies_div:
+    # ── Per-strategy divergence table ─────────────────────────────
+    strategies = divergence_data.get("strategies") or {}
+
+    if strategies:
         cols = [
-            ("Strategy",    45),
-            ("VP Value",    35),
-            ("VP Return",   28),
-            ("$ Divergence",32),
-            ("% Divergence",30),
-            ("VP Return",   10),
-        ]
-        # Simpler columns
-        cols = [
-            ("Strategy",    50),
-            ("VP Value",    35),
-            ("VP Return",   30),
-            ("$ Divergence",35),
-            ("% Divergence",30),
+            ("Strategy",     50),
+            ("VP Value",     35),
+            ("VP Return",    30),
+            ("$ Divergence", 35),
+            ("% Divergence", 30),
         ]
         pdf.table_header(cols)
 
-        for strategy, data in strategies_div.items():
-            vp_val  = data.get("virtual_value", 0)
-            vp_ret  = data.get("virtual_return")
+        for strategy, data in strategies.items():
+            curr_vp  = data.get("curr_vp_value", 0)
+            vp_ret   = data.get("virtual_return")
             dollar_d = data.get("dollar_divergence", 0)
-            pct_d   = data.get("pct_divergence", 0)
+            pct_d    = data.get("pct_divergence", 0)
 
             pdf.set_font("Helvetica", "", FS_SMALL)
-            pdf.cell(50, 6, strategy.replace("_", " ").title(), border=1)
-            pdf.cell(35, 6, f"${vp_val:,.2f}",           border=1, align="R")
+            pdf.set_text_color(*C_WHITE)
+            pdf.cell(50, 6,
+                     _safe(strategy.replace("_", " ").title()), border=1)
+            pdf.cell(35, 6, f"${curr_vp:,.2f}", border=1, align="R")
 
             ret_color = C_GREEN if vp_ret and vp_ret > 0 else C_RED
             pdf.set_text_color(*ret_color)
-            pdf.cell(30, 6, f"{vp_ret:+.2%}" if vp_ret else "N/A", border=1, align="R")
+            pdf.cell(30, 6,
+                     f"{vp_ret:+.2%}" if vp_ret is not None else "N/A",
+                     border=1, align="R")
 
             div_color = C_GREEN if dollar_d > 0 else C_RED
             pdf.set_text_color(*div_color)
             pdf.cell(35, 6, f"${dollar_d:+,.2f}", border=1, align="R")
-            pdf.cell(30, 6, f"{pct_d:+.2%}",      border=1, align="R")
+            pdf.cell(30, 6,
+                     f"{pct_d:+.2%}" if pct_d is not None else "N/A",
+                     border=1, align="R")
             pdf.set_text_color(*C_WHITE)
             pdf.ln()
 
-    # Cumulative history
-    history = div.get("history") or []
+    # ── Cumulative history ────────────────────────────────────────
+    history = divergence_data.get("history") or []
     if history:
         pdf.ln(6)
-        pdf.h2("Cumulative Divergence History")
-        cols = [("Date", 30), ("Strategy", 50), ("VP Value", 35), ("RP Value", 35), ("Divergence", 30)]
+        pdf.h2("Cumulative Divergence History (last 20 entries)")
+
+        cols = [
+            ("Date",        30),
+            ("Strategy",    50),
+            ("VP Value",    32),
+            ("RP Value",    32),
+            ("Divergence",  36),
+        ]
         pdf.table_header(cols)
-        for row in history[-10:]:   # last 10 entries
+
+        for row in history[:20]:
             d, strat, vp, rp = row[0], row[1], row[2], row[3]
             divergence = vp - rp
+
             pdf.set_font("Helvetica", "", FS_TINY)
-            pdf.cell(30, 5, str(d),   border=1)
-            pdf.cell(50, 5, str(strat).replace("_", " ").title(), border=1)
-            pdf.cell(35, 5, f"${vp:,.2f}",   border=1, align="R")
-            pdf.cell(35, 5, f"${rp:,.2f}",   border=1, align="R")
+            pdf.set_text_color(*C_WHITE)
+            pdf.cell(30, 5, _safe(str(d)),    border=1)
+            pdf.cell(50, 5,
+                     _safe(str(strat).replace("_", " ").title()),
+                     border=1)
+            pdf.cell(32, 5, f"${vp:,.2f}",  border=1, align="R")
+            pdf.cell(32, 5, f"${rp:,.2f}",  border=1, align="R")
+
             div_color = C_GREEN if divergence > 0 else C_RED
             pdf.set_text_color(*div_color)
-            pdf.cell(30, 5, f"${divergence:+,.2f}", border=1, align="R")
+            pdf.cell(36, 5,
+                     f"${divergence:+,.2f}", border=1, align="R")
             pdf.set_text_color(*C_WHITE)
             pdf.ln()
 
@@ -490,9 +508,9 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 
 		factor_items = [
 			("Alpha (daily)",    fr.get("alpha_daily"),  "{:.6f}"),
-			("Beta MKT",         fr.get("b_mkt"),        "{:.3f}"),
-			("Beta SMB",         fr.get("b_smb"),        "{:.3f}"),
-			("Beta HML",         fr.get("b_hml"),        "{:.3f}"),
+			("Beta MKT",         fr.get("b_MKT"),        "{:.3f}"),
+			("Beta SMB",         fr.get("b_SMB"),        "{:.3f}"),
+			("Beta HML",         fr.get("b_HML"),        "{:.3f}"),
 			("R²",               fr.get("r2"),           "{:.3f}"),
 			("p-val alpha",      fr.get("p_val_alpha"),  "{:.3f}"),
 			("Mu (annual)",      ms.get("mu_annual"),    "{:.2%}"),
@@ -622,6 +640,31 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			text = fmt.format(val_e) if val_e is not None else "N/A"
 			pdf.cell(35, 5, _safe(text), ln=True)
    
+		# Valuation summary
+		pdf.set_x(right_x)
+		pdf.set_font("Helvetica", "B", FS_SMALL)
+		pdf.set_text_color(*C_CYAN)
+		pdf.cell(85, 5, "Valuation", ln=True)
+
+		valuation_items = [
+			("PEG",   			val.get("peg", 0), 				"{:.2f}"),
+			("Fwd PE",  		val.get("fwd_pe", 0),   		"{:.1f}x"),
+   			("Ttm PE",  		val.get("ttm_pe", 0),   		"{:.1f}x"),
+			("EV EBITDA",  		val.get("ev_ebitda", 0),   		"{:.1f}x"),
+			("Target Price",	val.get("target_price", 0),   	"{:.2f}"),
+			("Earnings Growth",	val.get("earnings_growth", 0),	"{:.2%}"),
+			("Revenue Growth",	val.get("revenue_growth", 0),   "{:.2%}"),
+		]
+
+		for label, val_e, fmt in valuation_items:
+			pdf.set_x(right_x)
+			pdf.set_font("Helvetica", "", FS_SMALL)
+			pdf.set_text_color(*C_GREY)
+			pdf.cell(50, 5, label)
+			pdf.set_text_color(*C_WHITE)
+			text = fmt.format(val_e) if val_e is not None else "N/A"
+			pdf.cell(35, 5, _safe(text), ln=True)
+   
 		# ── Per-ticker charts ─────────────────────────────────────────
 		pdf.set_xy(left_x, end_y)
 		pdf.set_font("Helvetica", "B", FS_SMALL)
@@ -640,8 +683,8 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 				("Current Price",  f"${ms.get('s_current', 0):.2f}"),
 				("Posterior Mu",   f"{(state.get('posterior_mu') or {}).get(ticker, 0):.2%}"),
 				("Sigma (annual)", f"{ms.get('sigma_annual', 0):.2%}"),
-				("Median S_T",     f"${mc.get('p50', 0):.2f}"),
-				("VaR 95%",        f"${mc.get('var_95', 0):.2f}"),
+				("Median S_T",     f"${mc.get('pct', 0)[3]:.2f}"),
+				("VaR 95%",        f"${mc.get('VaR_95', 0):.2f}"),
 				("P(Profit)",        f"{mc.get('prob_up', 0):.1%}"),
 			]
 			# Print in two rows of three
@@ -700,7 +743,7 @@ def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: di
         ("E[Value]",      25),
         ("VaR 95% $",     25),
         ("CVaR 95% $",    25),
-        ("P(Loss)",       20),
+        ("P(Profit)",       20),
         ("5th Pct",       20),
     ]
 
@@ -714,11 +757,11 @@ def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: di
 
         pdf.set_font("Helvetica", "", FS_TINY)
         pdf.set_text_color(*C_WHITE)
-        pdf.cell(25, 6, f"${sim.get('p50', 0):,.0f}",           border=1, align="R")
-        pdf.cell(25, 6, f"${sim.get('expected_value', 0):,.0f}", border=1, align="R")
+        pdf.cell(25, 6, f"${sim.get('pct', 0)[3]:,.0f}",           border=1, align="R")
+        pdf.cell(25, 6, f"${sim.get('E_ST', 0):,.0f}", border=1, align="R")
 
-        var  = sim.get("var_95", 0)
-        cvar = sim.get("cvar_95", 0)
+        var  = sim.get("VaR_95", 0)
+        cvar = sim.get("CVaR_95", 0)
         pdf.set_text_color(*C_RED)
         pdf.cell(25, 6, f"${var:,.0f}",  border=1, align="R")
         pdf.cell(25, 6, f"${cvar:,.0f}", border=1, align="R")
@@ -728,7 +771,7 @@ def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: di
         pdf.cell(20, 6, f"{p_up:.1%}", border=1, align="R")
 
         pdf.set_text_color(*C_WHITE)
-        pdf.cell(20, 6, f"${sim.get('p5', 0):,.0f}", border=1, align="R")
+        pdf.cell(20, 6, f"${sim.get('pct', 0)[1]:,.0f}", border=1, align="R")
         pdf.ln()
 
     pdf.ln(6)
@@ -759,70 +802,75 @@ def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: di
 
 
 def _section_recommendation_table(pdf: PortfolioReport, state: dict):
-    """
-    Section 2 — Recommendation Table.
-    One row per ticker, one column per strategy plus consensus.
-    """
-    pdf.add_page()
-    pdf.set_bg()
-    pdf.h1("2. Recommendation Table")
+	"""
+	Section 2 — Recommendation Table.
+	One row per ticker, one column per strategy plus consensus.
+	"""
+	pdf.add_page()
+	pdf.set_bg()
+	pdf.h1("2. Recommendation Table")
 
-    rec_table = state.get("recommendation_table") or []
-    strategies = list((state.get("recommended_weights") or {}).keys())
+	rec_table = state.get("recommendation_table") or []
+	strategies = list((state.get("recommended_weights") or {}).keys())
 
-    # Header row — ticker + current + one col per strategy + consensus
-    strategy_w = min(28, int((CONTENT_W - 20 - 20 - 20) / (len(strategies) + 1)))
-    ticker_w   = 20
-    current_w  = 20
-    consensus_w= 20
+	# Header row — ticker + current + one col per strategy + consensus
+	strategy_w = min(28, int((CONTENT_W - 20 - 20 - 20) / (len(strategies) + 1)))
+	ticker_w   = 20
+	current_w  = 20
+	consensus_w= 20
 
-    header_cols = [("Ticker", ticker_w), ("Current", current_w)]
-    for s in strategies:
-        label = _safe(s.replace("_", " ").replace("max", "Max").replace("min", "Min"))
-        header_cols.append((label, strategy_w))
-    header_cols.append(("Consensus", consensus_w))
-    pdf.table_header(header_cols)
+	header_cols = [("Ticker", ticker_w), ("Current", current_w)]
+	for s in strategies:
+		label = _safe(s.replace("_", " ").replace("max", "Max").replace("min", "Min"))
+		header_cols.append((label, strategy_w))
+	header_cols.append(("Consensus", consensus_w))
+	pdf.table_header(header_cols)
 
-    for row in rec_table:
-        ticker = row["ticker"]
+	for row in rec_table:
+		ticker = row["ticker"]
 
-        pdf.set_font("Helvetica", "B", FS_TINY)
-        pdf.set_text_color(*C_CYAN)
-        pdf.cell(ticker_w, 6, ticker, border=1)
+		pdf.set_font("Helvetica", "B", FS_TINY)
+		pdf.set_text_color(*C_CYAN)
+		pdf.cell(ticker_w, 6, ticker, border=1)
 
-        pdf.set_font("Helvetica", "", FS_TINY)
-        pdf.set_text_color(*C_WHITE)
-        pdf.cell(current_w, 6,
-                 f"{row.get('current_weight', 0):.1%}", border=1, align="R")
+		pdf.set_font("Helvetica", "", FS_TINY)
+		pdf.set_text_color(*C_WHITE)
+		pdf.cell(current_w, 6,
+					f"{row.get('current_weight', 0):.1%}", border=1, align="R")
 
-        for strategy in strategies:
-            w      = row.get(f"{strategy}_weight", 0)
-            action = row.get(f"{strategy}_action", "HOLD")
-            delta  = row.get(f"{strategy}_delta", 0)
+		for strategy in strategies:
+			w      = row.get(f"{strategy}_weight", 0)
+			action = row.get(f"{strategy}_action", "HOLD")
+			delta  = row.get(f"{strategy}_delta", 0)
 
-            # Color based on action
-            color = C_GREEN if action == "BUY" else C_RED if action == "SELL" else C_GREY
-            pdf.set_text_color(*color)
-            pdf.set_font("Helvetica", "B" if action != "HOLD" else "", FS_TINY)
-            pdf.cell(strategy_w, 6,
-                     f"{w:.1%} ({delta:+.1%})", border=1, align="R")
+			# Color based on action
+			color = C_GREEN if action == "BUY" else C_RED if action == "SELL" else C_GREY
+			pdf.set_text_color(*color)
+			pdf.set_font("Helvetica", "B" if action != "HOLD" else "", FS_TINY)
+			pdf.cell(strategy_w, 6,
+						f"{w:.1%} ({delta:+.1%})", border=1, align="R")
 
-        # Consensus
-        consensus = row.get("consensus_action", "HOLD")
-        pdf.set_font("Helvetica", "B", FS_TINY)
-        pdf.action_cell(consensus, width=consensus_w)
-        pdf.ln()
+		# Consensus
+		consensus = row.get("consensus_action", "HOLD")
+		pdf.set_font("Helvetica", "B", FS_TINY)
+		pdf.action_cell(consensus, width=consensus_w)
+		pdf.ln()
+        
+		if pdf.get_y() > PAGE_H - 90:
+			pdf.add_page()
+			pdf.set_bg()
+			pdf.page_header_bar("2. Recommendation Table (continued)")
 
-    # Legend
-    pdf.ln(6)
-    pdf.set_font("Helvetica", "", FS_TINY)
-    pdf.set_text_color(*C_GREY)
-    pdf.cell(0, 5,
-        "Format: weight (delta from current) | "
-        f"BUY threshold: >{state.get('action_threshold', 0.02):.0%} | "
-        f"SELL threshold: <-{state.get('action_threshold', 0.02):.0%}",
-        ln=True
-    )
+	# Legend
+	pdf.ln(6)
+	pdf.set_font("Helvetica", "", FS_TINY)
+	pdf.set_text_color(*C_GREY)
+	pdf.cell(0, 5,
+		"Format: weight (delta from current) | "
+		f"BUY threshold: >{state.get('action_threshold', 0.02):.0%} | "
+		f"SELL threshold: <-{state.get('action_threshold', 0.02):.0%}",
+		ln=True
+	)
 
 
 def _section_advisory_commentary(pdf: PortfolioReport, state: dict):
@@ -847,7 +895,7 @@ def _section_advisory_commentary(pdf: PortfolioReport, state: dict):
 # MAIN ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def generate_report(final_state: dict, user_path, charts_dir=None) -> str:
+def generate_report(final_state: dict, report_dir, charts_dir=None, divergence_data=None) -> str:
     """
     Generates the weekly portfolio PDF report.
 
@@ -860,11 +908,8 @@ def generate_report(final_state: dict, user_path, charts_dir=None) -> str:
     Returns:
         Path to generated PDF as string
     """
-    from pathlib import Path
-    user_path  = Path(user_path)
     charts_dir = Path(charts_dir) if charts_dir else None
-    reports_dir= user_path / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
 
     run_date    = final_state.get("run_date", str(date.today()))
 
@@ -890,10 +935,10 @@ def generate_report(final_state: dict, user_path, charts_dir=None) -> str:
     _section_model_outputs(pdf, final_state, charts_dir)
     print(f"    [ok] Model outputs")
     
-    _section_virtual_portfolio(pdf, final_state)
+    _section_virtual_portfolio(pdf, divergence_data)
     print(f"    [ok] Virtual portfolio")
 
-    pdf_path = reports_dir / f"report_{final_state["user_name"]}_{run_date}.pdf"
+    pdf_path = report_dir / f"report_{final_state["user_name"]}_{run_date}.pdf"
     pdf.output(str(pdf_path))
     print(f"  [Report] Saved to {pdf_path}")
 

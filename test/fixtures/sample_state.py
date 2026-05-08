@@ -29,7 +29,7 @@ def make_mc_stats(paths_list, s_current):
         "p95":           float(np.percentile(S_T, 95)),
         "var_95":        var_95,
         "cvar_95":       cvar_95,
-        "prob_loss":     float(np.mean(S_T < s_current)),
+        "prob_up":     float(np.mean(S_T < s_current)),
         "expected_value":float(S_T.mean()),
         "paths":         paths_list,
     }

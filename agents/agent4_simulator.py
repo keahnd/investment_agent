@@ -348,7 +348,7 @@ def build_advisory_prompt(
         f"  median_value=${curr.get('p50', 0):,.0f}CAD"
         f"  VaR95=${curr.get('var_95', 0):,.0f}CAD"
         f"  CVaR95=${curr.get('cvar_95', 0):,.0f}CAD"
-        f"  prob_loss={curr.get('prob_loss', 0):.1%}"
+        f"  prob_up={curr.get('prob_up', 0):.1%}"
         f"  expected_value=${curr.get('expected_value', 0):,.0f}CAD"
     )
 
@@ -359,7 +359,7 @@ def build_advisory_prompt(
                 f"  median_value=${sim.get('p50', 0):,.0f}CAD"
                 f"  VaR95=${sim.get('var_95', 0):,.0f}CAD"
                 f"  CVaR95=${sim.get('cvar_95', 0):,.0f}CAD"
-                f"  prob_loss={sim.get('prob_loss', 0):.1%}"
+                f"  prob_up={sim.get('prob_up', 0):.1%}"
                 f"  expected_value=${sim.get('expected_value', 0):,.0f}CAD"
             )
 

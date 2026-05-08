@@ -8,10 +8,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 import yfinance as yf
 
-from agents.graph import pipeline_graph
-from database.schema     import init_database
-from database.reconciler import reconcile_virtual_portfolio
-from database.persist    import persist_to_database
+from agents.graph 			import pipeline_graph
+from database.schema		import init_database
+from database.reconciler	import reconcile_virtual_portfolio, build_divergence_data
+from database.persist    	import persist_to_database
+from reports.report 		import generate_report
+from reports.charts			import generate_all_charts
 
 load_dotenv()
 
@@ -98,14 +100,19 @@ def run_user(user_path: Path) -> None:
 	# Initialise database — creates tables if they don't exist
 	conn = init_database(user_path)
 
-	# Step 1 — look backward
-	# Reconciler needs prices — pass raw_prices if already cached
-	# or let reconciler fetch them internally
+	# Step 1 — reconcile
 	try:
 		with open(vp_output, 'w', encoding='utf-8') as f:
-			reconcile_virtual_portfolio(conn, today, file=f)
+			reconcile_virtual_portfolio(conn, today, f)
 	except Exception as e:
 		print(f"  [warn] Reconciler failed: {e}")
+
+	# Step 2 — build divergence data for report
+	try:
+		divergence_data = build_divergence_data(conn, today)
+	except Exception as e:
+		print(f"  [warn] Divergence data build failed: {e}")
+		divergence_data = None
 
 	usd_cad_rate = fetch_usd_cad_rate()
 
@@ -115,7 +122,7 @@ def run_user(user_path: Path) -> None:
 		# Run metadata
 		"user_name":  user_name,
 		"user_path":  str(user_path.resolve()),
-		"run_date":   date.today().isoformat(),
+		"run_date":   today,
 		"tickers":    tickers,
 		"current_weights":  weights,
 		"cad_usd_rate":		usd_cad_rate,
@@ -178,6 +185,16 @@ def run_user(user_path: Path) -> None:
 			print(f"  {row['ticker']:<10} {row['current_weight']:>8.1%} {weights} {row.get('consensus_action', 'N/A'):<10}", file=f)
    
 	conn.close()
+ 
+	charts_dir  = user_path / "data" / f"{today}" / "raw" / "charts"
+	generate_all_charts(final_state, charts_dir)
+
+	pdf_path = generate_report(
+		final_state     = final_state,
+		report_dir      = report_dir,
+		charts_dir      = charts_dir,
+		divergence_data = divergence_data
+	)
 
 
 def main():

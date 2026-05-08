@@ -21,6 +21,8 @@ def _fetch_opening_prices(tickers, start):
     Returns:
         price dataframe
     """
+    if isinstance(start, str):
+        start = datetime.strptime(start, "%Y-%m-%d")
     for attempt in range(5):
         wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
         try:
@@ -329,3 +331,115 @@ def reconcile_virtual_portfolio(conn, today, file=None):
     _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
                                curr_rp_value, last_rp_value, real_weights,
                                raw_prices, conn, today, file)
+    
+
+def build_divergence_data(conn, today: str) -> dict:
+    """
+    Queries the database to build the divergence summary dict
+    for the report. Called from pipeline.py after reconciliation.
+    
+    Returns a dict with current values, returns, and history.
+    Returns None if insufficient data exists.
+    """
+    # Check we have data to work with
+    has_vp = conn.execute(
+        "SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (today,)
+    ).fetchone()[0]
+    
+    has_rp = conn.execute(
+        "SELECT COUNT(*) FROM portfolios WHERE date = ?", (today,)
+    ).fetchone()[0]
+    
+    if not has_vp or not has_rp:
+        return None
+
+    # Current real portfolio value
+    curr_rp_value = conn.execute(
+        "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today,)
+    ).fetchone()[0] or 0.0
+
+    # Last real portfolio value — most recent date before today
+    last_rp_date = conn.execute(
+        "SELECT MAX(date) FROM portfolios WHERE date < ?", (today,)
+    ).fetchone()[0]
+
+    last_rp_value = 0.0
+    if last_rp_date:
+        last_rp_value = conn.execute(
+            "SELECT SUM(market_value) FROM portfolios WHERE date = ?",
+            (last_rp_date,)
+        ).fetchone()[0] or 0.0
+
+    real_return = (
+        (curr_rp_value - last_rp_value) / last_rp_value
+        if last_rp_value else None
+    )
+
+    # Current VP values per strategy
+    curr_vp_rows = conn.execute("""
+        SELECT strategy, SUM(market_value) as total
+        FROM virtual_portfolio
+        WHERE date = ?
+        GROUP BY strategy
+    """, (today,)).fetchall()
+
+    curr_vp = {row[0]: row[1] for row in curr_vp_rows}
+
+    # Last VP values per strategy
+    last_vp_date = conn.execute(
+        "SELECT MAX(date) FROM virtual_portfolio WHERE date < ?", (today,)
+    ).fetchone()[0]
+
+    last_vp = {}
+    if last_vp_date:
+        last_vp_rows = conn.execute("""
+            SELECT strategy, SUM(market_value) as total
+            FROM virtual_portfolio
+            WHERE date = ?
+            GROUP BY strategy
+        """, (last_vp_date,)).fetchall()
+        last_vp = {row[0]: row[1] for row in last_vp_rows}
+
+    # Build per-strategy summary
+    strategies = {}
+    for strategy, curr_val in curr_vp.items():
+        last_val = last_vp.get(strategy, 0.0)
+        virtual_return = (
+            (curr_val - last_val) / last_val
+            if last_val else None
+        )
+        dollar_div = curr_val - curr_rp_value
+        pct_div    = dollar_div / curr_rp_value if curr_rp_value else None
+
+        strategies[strategy] = {
+            "curr_vp_value":     curr_val,
+            "last_vp_value":     last_val,
+            "virtual_return":    virtual_return,
+            "dollar_divergence": dollar_div,
+            "pct_divergence":    pct_div,
+        }
+
+    # Cumulative history — last 20 entries per strategy
+    history = conn.execute("""
+        SELECT v.date, v.strategy,
+               SUM(v.market_value) as vp_val,
+               p.rp_val
+        FROM virtual_portfolio v
+        JOIN (
+            SELECT date, SUM(market_value) AS rp_val
+            FROM portfolios
+            GROUP BY date
+        ) p ON v.date = p.date
+        GROUP BY v.date, v.strategy
+        ORDER BY v.date DESC
+        LIMIT 100
+    """).fetchall()
+
+    return {
+        "today":         today,
+        "curr_rp_value": curr_rp_value,
+        "last_rp_value": last_rp_value,
+        "real_return":   real_return,
+        "strategies":    strategies,
+        "history":       history,
+    }

@@ -112,6 +112,10 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
     Returns:
         DataFrame of adjusted close prices indexed by date, one column per ticker.
     """
+    if isinstance(today, str):
+        today = date.fromisoformat(today)
+    if isinstance(start_date, str):
+        start_date = date.fromisoformat(start_date)
     all_tickers = list(tickers)
 
     if not force_refresh and os.path.exists(CACHE_FILE):

@@ -66,7 +66,7 @@ def init_database(user_path):
 					mc_p75              REAL,
 					mc_p95				REAL,
 					mc_var95            REAL,
-					mc_cvar_95            REAL,
+					mc_cvar_95          REAL,
 					
 					forward_pe          REAL,
 					ttm_pe              REAL,
