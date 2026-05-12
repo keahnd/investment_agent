@@ -186,7 +186,7 @@ def port_monte_carlo(mu: np.ndarray, covar_ann: np.ndarray, init_port_value: flo
         "S_T": S_T,
         "E_ST": E_ST,
         "prob_up": prob_up,
-        "VaR_95": pct[1],
+        "VaR_95": init_port_value - pct[1],
         "CVaR_95": CVaR_95,
         "pct": pct,
         "N_paths": N_paths,

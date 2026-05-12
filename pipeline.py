@@ -100,20 +100,6 @@ def run_user(user_path: Path) -> None:
 	# Initialise database — creates tables if they don't exist
 	conn = init_database(user_path)
 
-	# Step 1 — reconcile
-	try:
-		with open(vp_output, 'w', encoding='utf-8') as f:
-			reconcile_virtual_portfolio(conn, today, f)
-	except Exception as e:
-		print(f"  [warn] Reconciler failed: {e}")
-
-	# Step 2 — build divergence data for report
-	try:
-		divergence_data = build_divergence_data(conn, today)
-	except Exception as e:
-		print(f"  [warn] Divergence data build failed: {e}")
-		divergence_data = None
-
 	usd_cad_rate = fetch_usd_cad_rate()
 
 	tickers, weights, total_value, portfolio_rows = load_portfolio(user_path, usd_cad_rate)
@@ -171,7 +157,22 @@ def run_user(user_path: Path) -> None:
 	if db_errors:
 		for e in db_errors:
 			print(f"  [db error] {e}")
-	
+
+	# Step 4 — reconcile
+	reconcile_result = None
+	try:
+		with open(vp_output, 'w', encoding='utf-8') as f:
+			reconcile_result = reconcile_virtual_portfolio(conn, today, f)
+	except Exception as e:
+		print(f"  [warn] Reconciler failed: {e}")
+
+	# Step 5 — build divergence data for report
+	try:
+		divergence_data = build_divergence_data(conn, today, reconcile_result)
+	except Exception as e:
+		print(f"  [warn] Divergence data build failed: {e}")
+		divergence_data = None
+
 	with open(output_path, 'w', encoding='utf-8') as f:
 		strategies = ["max_sharpe", "min_variance", "risk_parity", "target_return", "robust_mv"]
 		header = f"{'Ticker':<10} {'Current':>8} " + " ".join(f"{s[:10]:>10}" for s in strategies) + f"  {'Consensus':<10}"

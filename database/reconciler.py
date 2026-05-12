@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, date
 from database.schema import init_database, insert_portfolio_row, insert_model_output, insert_recommendation, insert_virtual_portfolio
 import requests, zipfile, io
+from curl_cffi import requests
 import time
 import yfinance as yf
 
@@ -228,7 +229,7 @@ def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
         s: (curr_vp_values[s] - last_vp_values[s]) / last_vp_values[s] if last_vp_values.get(s) else None for s in curr_vp_values
     }
     dollar_divergence = {s: curr_vp_values[s] - curr_rp_value for s in curr_vp_values}
-    return_pct_divergence = {s: dollar_divergence[s] / curr_rp_value for s in dollar_divergence}
+    return_pct_divergence = {s: dollar_divergence[s] / curr_rp_value if curr_rp_value else None for s in dollar_divergence}
 
     print(f"\n{'='*70}", file=file)
     print(f"  PORTFOLIO DIVERGENCE SUMMARY — {today}", file=file)
@@ -291,15 +292,16 @@ def reconcile_virtual_portfolio(conn, today, file=None):
         file: File object to write output to
 
     Returns:
-        None. Writes VP snapshot to DB and prints divergence summary to file.
+        Dict with curr_vp_values, last_vp_values, virtual_portfolio, real_weights,
+        raw_prices — used by build_divergence_data. None if insufficient data.
     """
     if conn.execute("SELECT COUNT(*) FROM recommendations").fetchone()[0] == 0:
         print("  [WARNING] No recommendations found. First run.", file=file)
-        return
+        return None
 
     dates = _validate_dates(conn, today, file)
     if dates is None:
-        return
+        return None
     last_rec_date, last_vp_date, opening_date = dates
 
     last_rec, weights_by_strategy = _load_recommendations(conn, last_rec_date, file)
@@ -316,11 +318,11 @@ def reconcile_virtual_portfolio(conn, today, file=None):
     
     last_vp_values = dict(conn.execute("SELECT strategy, SUM(market_value) FROM virtual_portfolio WHERE date = ? GROUP BY strategy",
                                        (last_vp_date,)).fetchall()) if last_vp_date else {}
-    last_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (last_rec_date,)).fetchone()[0]
+    last_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (last_rec_date,)).fetchone()[0] or 0.0
 
     virtual_portfolio = _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file)
 
-    curr_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today,)).fetchone()[0]
+    curr_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today,)).fetchone()[0] or 0.0
     curr_vp_values = {
         s: sum(pos["shares"] * float(raw_prices[t].dropna().iloc[-1])
                for t, pos in tickers.items() if t in raw_prices.columns)
@@ -331,26 +333,41 @@ def reconcile_virtual_portfolio(conn, today, file=None):
     _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
                                curr_rp_value, last_rp_value, real_weights,
                                raw_prices, conn, today, file)
-    
 
-def build_divergence_data(conn, today: str) -> dict:
+    return {
+        "curr_vp_values":    curr_vp_values,
+        "last_vp_values":    last_vp_values,
+        "virtual_portfolio": virtual_portfolio,
+        "real_weights":      real_weights,
+        "raw_prices":        raw_prices,
+    }
+
+
+
+def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> dict:
     """
-    Queries the database to build the divergence summary dict
-    for the report. Called from pipeline.py after reconciliation.
-    
-    Returns a dict with current values, returns, and history.
+    Queries the database to build the divergence summary dict for the report.
+    Called from pipeline.py after reconciliation.
+
+    Args:
+        reconcile_result: Return value of reconcile_virtual_portfolio. When provided,
+                          curr_vp_values (revalued at today's prices) and
+                          last_vp_values are used for virtual return calculation,
+                          and per-ticker contributions are included.
+
+    Returns a dict with current values, returns, history, and contributions.
     Returns None if insufficient data exists.
     """
-    # Check we have data to work with
-    has_vp = conn.execute(
-        "SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (today,)
-    ).fetchone()[0]
-    
     has_rp = conn.execute(
         "SELECT COUNT(*) FROM portfolios WHERE date = ?", (today,)
     ).fetchone()[0]
-    
-    if not has_vp or not has_rp:
+
+    # Need either live reconcile data or a DB VP snapshot
+    curr_vp_date = conn.execute(
+        "SELECT MAX(date) FROM virtual_portfolio WHERE market_value > 0"
+    ).fetchone()[0]
+
+    if (not reconcile_result and not curr_vp_date) or not has_rp:
         return None
 
     # Current real portfolio value
@@ -375,39 +392,34 @@ def build_divergence_data(conn, today: str) -> dict:
         if last_rp_value else None
     )
 
-    # Current VP values per strategy
-    curr_vp_rows = conn.execute("""
-        SELECT strategy, SUM(market_value) as total
-        FROM virtual_portfolio
-        WHERE date = ?
-        GROUP BY strategy
-    """, (today,)).fetchall()
-
-    curr_vp = {row[0]: row[1] for row in curr_vp_rows}
-
-    # Last VP values per strategy
-    last_vp_date = conn.execute(
-        "SELECT MAX(date) FROM virtual_portfolio WHERE date < ?", (today,)
-    ).fetchone()[0]
-
-    last_vp = {}
-    if last_vp_date:
-        last_vp_rows = conn.execute("""
+    # Current and last VP values — prefer live reconcile data (revalued at today's prices)
+    if reconcile_result:
+        curr_vp = reconcile_result["curr_vp_values"]
+        last_vp = reconcile_result["last_vp_values"]
+    else:
+        curr_vp_rows = conn.execute("""
             SELECT strategy, SUM(market_value) as total
-            FROM virtual_portfolio
-            WHERE date = ?
-            GROUP BY strategy
-        """, (last_vp_date,)).fetchall()
-        last_vp = {row[0]: row[1] for row in last_vp_rows}
+            FROM virtual_portfolio WHERE date = ? GROUP BY strategy
+        """, (curr_vp_date,)).fetchall()
+        curr_vp = {row[0]: row[1] for row in curr_vp_rows}
+
+        last_vp_date = conn.execute(
+            "SELECT MAX(date) FROM virtual_portfolio WHERE date < ? AND market_value > 0",
+            (curr_vp_date,)
+        ).fetchone()[0]
+        last_vp = {}
+        if last_vp_date:
+            last_vp_rows = conn.execute("""
+                SELECT strategy, SUM(market_value) as total
+                FROM virtual_portfolio WHERE date = ? GROUP BY strategy
+            """, (last_vp_date,)).fetchall()
+            last_vp = {row[0]: row[1] for row in last_vp_rows}
 
     # Build per-strategy summary
     strategies = {}
     for strategy, curr_val in curr_vp.items():
         last_val = last_vp.get(strategy, 0.0)
-        virtual_return = (
-            (curr_val - last_val) / last_val
-            if last_val else None
-        )
+        virtual_return = (curr_val - last_val) / last_val if last_val else None
         dollar_div = curr_val - curr_rp_value
         pct_div    = dollar_div / curr_rp_value if curr_rp_value else None
 
@@ -419,7 +431,25 @@ def build_divergence_data(conn, today: str) -> dict:
             "pct_divergence":    pct_div,
         }
 
-    # Cumulative history — last 20 entries per strategy
+    # Per-ticker contributions (requires live reconcile data)
+    contributions = {}
+    if reconcile_result:
+        virtual_portfolio = reconcile_result["virtual_portfolio"]
+        real_weights      = reconcile_result["real_weights"]
+        raw_prices        = reconcile_result["raw_prices"]
+        for strategy, positions in virtual_portfolio.items():
+            rows = []
+            for ticker, pos in positions.items():
+                if ticker not in raw_prices.columns:
+                    continue
+                curr_price = float(raw_prices[ticker].dropna().iloc[-1])
+                ret        = (curr_price - pos["price"]) / pos["price"]
+                virt_w     = pos["weight"]
+                real_w     = real_weights.get(ticker, 0.0)
+                rows.append((ticker, virt_w, real_w, ret, (virt_w - real_w) * ret))
+            contributions[strategy] = sorted(rows, key=lambda x: abs(x[4]), reverse=True)[:10]
+
+    # Cumulative history
     history = conn.execute("""
         SELECT v.date, v.strategy,
                SUM(v.market_value) as vp_val,
@@ -436,10 +466,11 @@ def build_divergence_data(conn, today: str) -> dict:
     """).fetchall()
 
     return {
-        "today":         today,
-        "curr_rp_value": curr_rp_value,
-        "last_rp_value": last_rp_value,
-        "real_return":   real_return,
-        "strategies":    strategies,
-        "history":       history,
+        "today":           today,
+        "curr_rp_value":   curr_rp_value,
+        "last_rp_value":   last_rp_value,
+        "real_return":     real_return,
+        "strategies":      strategies,
+        "contributions":   contributions,
+        "history":         history,
     }

@@ -202,7 +202,7 @@ class PortfolioReport(FPDF):
 		self.set_text_color(*C_WHITE)
 
 	def header(self):
-		pass   # handled manually per section
+		self.set_bg()
 
 	def footer(self):
 		self.set_y(-12)
@@ -358,119 +358,172 @@ def _section_portfolio_snapshot(pdf: PortfolioReport, state: dict):
 
 
 def _section_virtual_portfolio(pdf: PortfolioReport, divergence_data: dict):
-    """
-    Section 2 — Virtual Portfolio Divergence.
-    Reads from divergence_data dict built by build_divergence_data().
-    Shows placeholder if data not available.
-    """
-    pdf.add_page()
-    pdf.set_bg()
-    pdf.h1("2. Virtual Portfolio Divergence")
+	"""
+	Section 5 — Virtual Portfolio Divergence.
+	Reads from divergence_data dict built by build_divergence_data().
+	Shows placeholder if data not available.
+	"""
+	pdf.add_page()
+	pdf.set_bg()
+	pdf.h1("5. Virtual Portfolio Divergence")
 
-    if not divergence_data:
-        pdf.set_text_color(*C_GREY)
-        pdf.set_font("Helvetica", "I", FS_BODY)
-        pdf.multi_cell(0, 6,
-            "Virtual portfolio divergence data not available. "
-            "This section populates after the first full pipeline run "
-            "with prior recommendations in the database."
-        )
-        return
+	if not divergence_data:
+		pdf.set_text_color(*C_GREY)
+		pdf.set_font("Helvetica", "I", FS_BODY)
+		pdf.multi_cell(0, 6,
+			"Virtual portfolio divergence data not available. "
+			"This section populates after the first full pipeline run "
+			"with prior recommendations in the database."
+		)
+		return
 
-    # ── Top-line summary ──────────────────────────────────────────
-    curr_rp = divergence_data["curr_rp_value"]
-    real_ret = divergence_data.get("real_return")
+	# ── Top-line summary ──────────────────────────────────────────
+	curr_rp = divergence_data["curr_rp_value"]
+	real_ret = divergence_data.get("real_return")
 
-    pdf.kv("Real Portfolio Value",
-           f"${curr_rp:,.2f} CAD")
-    pdf.kv("Real Portfolio Return",
-           f"{real_ret:+.2%}" if real_ret is not None else "N/A")
-    pdf.ln(4)
+	pdf.kv("Real Portfolio Value",
+			f"${curr_rp:,.2f} CAD")
+	pdf.kv("Real Portfolio Return",
+			f"{real_ret:+.2%}" if real_ret is not None else "N/A")
+	pdf.ln(4)
 
-    # ── Per-strategy divergence table ─────────────────────────────
-    strategies = divergence_data.get("strategies") or {}
+	# ── Per-strategy divergence table ─────────────────────────────
+	strategies = divergence_data.get("strategies") or {}
 
-    if strategies:
-        cols = [
-            ("Strategy",     50),
-            ("VP Value",     35),
-            ("VP Return",    30),
-            ("$ Divergence", 35),
-            ("% Divergence", 30),
-        ]
-        pdf.table_header(cols)
+	if strategies:
+		cols = [
+			("Strategy",     50),
+			("VP Value",     35),
+			("VP Return",    30),
+			("$ Divergence", 35),
+			("% Divergence", 30),
+		]
+		pdf.table_header(cols)
 
-        for strategy, data in strategies.items():
-            curr_vp  = data.get("curr_vp_value", 0)
-            vp_ret   = data.get("virtual_return")
-            dollar_d = data.get("dollar_divergence", 0)
-            pct_d    = data.get("pct_divergence", 0)
+		for strategy, data in strategies.items():
+			curr_vp  = data.get("curr_vp_value", 0)
+			vp_ret   = data.get("virtual_return")
+			dollar_d = data.get("dollar_divergence", 0)
+			pct_d    = data.get("pct_divergence", 0)
 
-            pdf.set_font("Helvetica", "", FS_SMALL)
-            pdf.set_text_color(*C_WHITE)
-            pdf.cell(50, 6,
-                     _safe(strategy.replace("_", " ").title()), border=1)
-            pdf.cell(35, 6, f"${curr_vp:,.2f}", border=1, align="R")
+			pdf.set_font("Helvetica", "", FS_SMALL)
+			pdf.set_text_color(*C_WHITE)
+			pdf.cell(50, 6,
+						_safe(strategy.replace("_", " ").title()), border=1)
+			pdf.cell(35, 6, f"${curr_vp:,.2f}", border=1, align="R")
 
-            ret_color = C_GREEN if vp_ret and vp_ret > 0 else C_RED
-            pdf.set_text_color(*ret_color)
-            pdf.cell(30, 6,
-                     f"{vp_ret:+.2%}" if vp_ret is not None else "N/A",
-                     border=1, align="R")
+			ret_color = C_GREEN if vp_ret and vp_ret > 0 else C_RED
+			pdf.set_text_color(*ret_color)
+			pdf.cell(30, 6,
+						f"{vp_ret:+.2%}" if vp_ret is not None else "N/A",
+						border=1, align="R")
 
-            div_color = C_GREEN if dollar_d > 0 else C_RED
-            pdf.set_text_color(*div_color)
-            pdf.cell(35, 6, f"${dollar_d:+,.2f}", border=1, align="R")
-            pdf.cell(30, 6,
-                     f"{pct_d:+.2%}" if pct_d is not None else "N/A",
-                     border=1, align="R")
-            pdf.set_text_color(*C_WHITE)
-            pdf.ln()
+			div_color = C_GREEN if dollar_d > 0 else C_RED
+			pdf.set_text_color(*div_color)
+			pdf.cell(35, 6, f"${dollar_d:+,.2f}", border=1, align="R")
+			pdf.cell(30, 6,
+						f"{pct_d:+.2%}" if pct_d is not None else "N/A",
+						border=1, align="R")
+			pdf.set_text_color(*C_WHITE)
+			pdf.ln()
 
-    # ── Cumulative history ────────────────────────────────────────
-    history = divergence_data.get("history") or []
-    if history:
-        pdf.ln(6)
-        pdf.h2("Cumulative Divergence History (last 20 entries)")
+	# ── Per-ticker contributions ──────────────────────────────────
+	contributions = divergence_data.get("contributions") or {}
+	if contributions:
+		pdf.ln(6)
+		pdf.h2("Key Asset Contributions")
+		pdf.set_font("Helvetica", "", FS_TINY)
+		pdf.set_text_color(*C_GREY)
+		pdf.multi_cell(0, 4,
+			"Contrib = (Virtual Weight - Real Weight) x Ticker Return. "
+			"Positive = VP weighting added return vs real portfolio. Top 10 by absolute impact."
+		)
+		pdf.ln(2)
 
-        cols = [
-            ("Date",        30),
-            ("Strategy",    50),
-            ("VP Value",    32),
-            ("RP Value",    32),
-            ("Divergence",  36),
-        ]
-        pdf.table_header(cols)
+		contrib_cols = [
+			("Ticker",   22),
+			("Virt Wt",  22),
+			("Real Wt",  22),
+			("Wt Diff",  22),
+			("Return",   25),
+			("Contrib",  25),
+		]
+		for strategy, rows in contributions.items():
+			if not rows:
+				continue
+			pdf.h2(_safe(strategy.replace("_", " ").title()))
+			pdf.table_header(contrib_cols)
+			for ticker, virt_w, real_w, ret, contrib in rows:
+				pdf.set_font("Helvetica", "", FS_TINY)
+				pdf.set_text_color(*C_WHITE)
+				pdf.cell(22, 5, _safe(ticker), border=1)
+				pdf.cell(22, 5, f"{virt_w:.1%}", border=1, align="R")
+				pdf.cell(22, 5, f"{real_w:.1%}", border=1, align="R")
 
-        for row in history[:20]:
-            d, strat, vp, rp = row[0], row[1], row[2], row[3]
-            divergence = vp - rp
+				diff_color = C_GREEN if virt_w > real_w else C_RED
+				pdf.set_text_color(*diff_color)
+				pdf.cell(22, 5, f"{virt_w - real_w:+.1%}", border=1, align="R")
 
-            pdf.set_font("Helvetica", "", FS_TINY)
-            pdf.set_text_color(*C_WHITE)
-            pdf.cell(30, 5, _safe(str(d)),    border=1)
-            pdf.cell(50, 5,
-                     _safe(str(strat).replace("_", " ").title()),
-                     border=1)
-            pdf.cell(32, 5, f"${vp:,.2f}",  border=1, align="R")
-            pdf.cell(32, 5, f"${rp:,.2f}",  border=1, align="R")
+				ret_color = C_GREEN if ret > 0 else C_RED
+				pdf.set_text_color(*ret_color)
+				pdf.cell(25, 5, f"{ret:+.2%}", border=1, align="R")
 
-            div_color = C_GREEN if divergence > 0 else C_RED
-            pdf.set_text_color(*div_color)
-            pdf.cell(36, 5,
-                     f"${divergence:+,.2f}", border=1, align="R")
-            pdf.set_text_color(*C_WHITE)
-            pdf.ln()
+				contrib_color = C_GREEN if contrib > 0 else C_RED
+				pdf.set_text_color(*contrib_color)
+				pdf.cell(25, 5, f"{contrib:+.2%}", border=1, align="R")
+				pdf.set_text_color(*C_WHITE)
+				pdf.ln()
+				
+				# Check page space — add new page if less than 70mm remaining
+				if pdf.get_y() > PAGE_H - 90:
+					pdf.add_page()
+					pdf.set_bg()
+					pdf.page_header_bar("5. Virtual Portfolio Divergence (continued)")
+
+	# ── Cumulative history ────────────────────────────────────────
+	history = divergence_data.get("history") or []
+	if history:
+		pdf.ln(6)
+		pdf.h2("Cumulative Divergence History (last 20 entries)")
+
+		cols = [
+			("Date",        30),
+			("Strategy",    50),
+			("VP Value",    32),
+			("RP Value",    32),
+			("Divergence",  36),
+		]
+		pdf.table_header(cols)
+
+		for row in history[:20]:
+			d, strat, vp, rp = row[0], row[1], row[2], row[3]
+			divergence = vp - rp
+
+			pdf.set_font("Helvetica", "", FS_TINY)
+			pdf.set_text_color(*C_WHITE)
+			pdf.cell(30, 5, _safe(str(d)),    border=1)
+			pdf.cell(50, 5,
+						_safe(str(strat).replace("_", " ").title()),
+						border=1)
+			pdf.cell(32, 5, f"${vp:,.2f}",  border=1, align="R")
+			pdf.cell(32, 5, f"${rp:,.2f}",  border=1, align="R")
+
+			div_color = C_GREEN if divergence > 0 else C_RED
+			pdf.set_text_color(*div_color)
+			pdf.cell(36, 5,
+						f"${divergence:+,.2f}", border=1, align="R")
+			pdf.set_text_color(*C_WHITE)
+			pdf.ln()
 
 
 def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 	"""
-	Section 5 — Model Outputs Per Asset.
+	Section 6 — Model Outputs Per Asset.
 	Factor model, GARCH, financial health, earnings per ticker.
 	"""
 	pdf.add_page()
 	pdf.set_bg()
-	pdf.h1("5. Model Outputs Per Asset")
+	pdf.h1("6. Model Outputs Per Asset")
 
 	tickers  = state["tickers"]
 
@@ -489,7 +542,7 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		if pdf.get_y() > PAGE_H - 90:
 			pdf.add_page()
 			pdf.set_bg()
-			pdf.page_header_bar("5. Model Outputs Per Asset (continued)")
+			pdf.page_header_bar("6. Model Outputs Per Asset (continued)")
 
 		pdf.h2(f"{ticker} — {_safe(val.get('sector', ''))} | {_safe(val.get('industry', ''))}")
 
@@ -875,12 +928,12 @@ def _section_recommendation_table(pdf: PortfolioReport, state: dict):
 
 def _section_advisory_commentary(pdf: PortfolioReport, state: dict):
     """
-    Section 4 — Commentary.
+    Section 2 — Commentary.
     Quantitative anomaly flags, risk commentary, advisory commentary.
     """
     pdf.add_page()
     pdf.set_bg()
-    pdf.h1("4. Advisory Commentary")
+    pdf.h1("2. Advisory Commentary")
 
     # Advisory commentary — main section
     advisory = state.get("advisory_commentary")
@@ -923,20 +976,20 @@ def generate_report(final_state: dict, report_dir, charts_dir=None, divergence_d
     _section_portfolio_snapshot(pdf, final_state)
     print(f"    [ok] Portfolio snapshot")
     
+    _section_advisory_commentary(pdf, final_state)
+    print(f"    [ok] Commentary")
+    
     _section_recommendation_table(pdf, final_state)
     print(f"    [ok] Recommendation table")
     
     _section_simulation_charts(pdf, final_state, charts_dir)
     print(f"    [ok] Simulation charts")
-
-    _section_advisory_commentary(pdf, final_state)
-    print(f"    [ok] Commentary")
-
-    _section_model_outputs(pdf, final_state, charts_dir)
-    print(f"    [ok] Model outputs")
     
     _section_virtual_portfolio(pdf, divergence_data)
     print(f"    [ok] Virtual portfolio")
+
+    _section_model_outputs(pdf, final_state, charts_dir)
+    print(f"    [ok] Model outputs")
 
     pdf_path = report_dir / f"report_{final_state["user_name"]}_{run_date}.pdf"
     pdf.output(str(pdf_path))
