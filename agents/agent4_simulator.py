@@ -101,7 +101,7 @@ def run_monte_carlo(mu: float, sigma: float, S0: float, file=None):
         "S_T": S_T,
         "E_ST": E_ST,
         "prob_up": prob_up,
-        "VaR_95": pct[1],
+        "VaR_95": S_current - pct[1],
         "CVaR_95": CVaR_95,
         "pct": pct,
         "N_paths": N_paths,
