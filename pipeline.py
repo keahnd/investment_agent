@@ -8,15 +8,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 import yfinance as yf
 import json
-
-from agents.graph 			import pipeline_graph
-from database.schema		import init_database
-from database.reconciler	import reconcile_virtual_portfolio, build_divergence_data
-from database.persist    	import persist_to_database
-from reports.report 		import generate_report
-from reports.charts			import generate_all_charts
-from reports.email 			import send_report_email, send_error_email
 import traceback
+
+from agents.graph 					import pipeline_graph
+from database.schema				import init_database
+from database.reconciler			import reconcile_virtual_portfolio, build_divergence_data
+from database.persist    			import persist_to_database
+from reports.report 				import generate_report
+from reports.charts					import generate_all_charts
+from reports.email 					import send_report_email, send_error_email
+from scraper.wealthsimple_scraper 	import scrape_user_holdings
 
 load_dotenv()
 
@@ -56,6 +57,8 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 	with open(user_path / "portfolio.csv", newline="") as f:
 		reader = csv.DictReader(f)
 		for row in reader:
+			if not row.get("Symbol"):
+				continue
 			sym      = row["Symbol"].strip().upper()
 			exchange = row.get("Exchange", "").strip()
 			if exchange == "TSX":
@@ -94,23 +97,26 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 
 
 def run_user(user_path: Path) -> None:
-	user_name = user_path.name
-	print(f"\n{'='*60}")
-	print(f"  Running pipeline for: {user_name}")
-	print(f"{'='*60}")
-
-	today = datetime.today().strftime("%Y-%m-%d")
- 
-	user_email = get_user_email(user_path)
- 
-	report_dir = user_path / "reports" / f"{today}"
-	report_dir.mkdir(exist_ok=True)
-	output_path = report_dir / f"recommendation_{today}.txt"
-	vp_output = report_dir / f"virtual_portfolio_{today}.txt"
-	asset_analysis =  report_dir / "asset_analysis"
-	asset_analysis.mkdir(exist_ok=True)
- 
 	try:
+		user_name = user_path.name
+		print(f"\n{'='*60}")
+		print(f"  Running pipeline for: {user_name}")
+		print(f"{'='*60}")
+
+		today = datetime.today().strftime("%Y-%m-%d")
+	
+		user_email = get_user_email(user_path)
+	
+		report_dir = user_path / "reports" / f"{today}"
+		report_dir.mkdir(exist_ok=True)
+		output_path = report_dir / f"recommendation_{today}.txt"
+		vp_output = report_dir / f"virtual_portfolio_{today}.txt"
+		asset_analysis =  report_dir / "asset_analysis"
+		asset_analysis.mkdir(exist_ok=True)
+
+		# scrape wealthsimple for up to date holdings
+		scrape_user_holdings(user_path)
+ 
 		# Initialise database — creates tables if they don't exist
 		conn = init_database(user_path)
 
