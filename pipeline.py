@@ -14,6 +14,8 @@ from database.reconciler	import reconcile_virtual_portfolio, build_divergence_da
 from database.persist    	import persist_to_database
 from reports.report 		import generate_report
 from reports.charts			import generate_all_charts
+from reports.email 			import send_report_email, send_error_email
+import traceback
 
 load_dotenv()
 
@@ -87,7 +89,6 @@ def run_user(user_path: Path) -> None:
 	print(f"  Running pipeline for: {user_name}")
 	print(f"{'='*60}")
 
-	db_path   = user_path / "history.db"
 	today = datetime.today().strftime("%Y-%m-%d")
  
 	report_dir = user_path / "reports" / f"{today}"
@@ -96,106 +97,113 @@ def run_user(user_path: Path) -> None:
 	vp_output = report_dir / f"virtual_portfolio_{today}.txt"
 	asset_analysis =  report_dir / "asset_analysis"
 	asset_analysis.mkdir(exist_ok=True)
-
-	# Initialise database — creates tables if they don't exist
-	conn = init_database(user_path)
-
-	usd_cad_rate = fetch_usd_cad_rate()
-
-	tickers, weights, total_value, portfolio_rows = load_portfolio(user_path, usd_cad_rate)
-
-	initial_state = {
-		# Run metadata
-		"user_name":  user_name,
-		"user_path":  str(user_path.resolve()),
-		"run_date":   today,
-		"tickers":    tickers,
-		"current_weights":  weights,
-		"cad_usd_rate":		usd_cad_rate,
-		"total_portfolio_value": total_value,
-		"portfolio_rows": portfolio_rows,
-
-		# All agent outputs start as None
-		"raw_text":             None,
-		"summaries":            None,
-		"aaii_sentiment":       None,
-		"fear_greed":           None,
-		"factor_results":    	None,
-		"garch_results":     	None,
-		"mu_sigma":          	None,
-		"valuation":         	None,
-		"financial_health":  	None,
-		"earnings_data":     	None,
-		"earnings_dates":    	None,
-		"covariance_matrix":	None,
-		"cape":					None,
-		"quant_commentary":  	None,
-		"bl_views":             None,
-		"posterior_mu":			None,
-		"recommended_weights":  None,
-		"recommendation_table": None,
-		"advisory_commentary":  None,
-		"mc_current":           None,
-		"mc_port_current":		None,
-		"mc_rebalanced":        None,
-		"sim_commentary":       None,
-		"errors":               [],
-		"report_path":          None,
-		"email_sent":           None,
-	}
-
-	final_state = pipeline_graph.invoke(initial_state)
-	print(f"\n  Keys in final state: {list(final_state.keys())}")
-	print(f"  Agent 1 summaries populated: {final_state['summaries'] is not None}")
-	print(f"  Agent 3 commentary populated: {final_state['advisory_commentary'] is not None}")
-
-	# Print results
-	print(f"\n  Done. Errors: {final_state['errors']}")
  
-	# Step 3 — persist
-	db_errors = persist_to_database(final_state, conn)
-	if db_errors:
-		for e in db_errors:
-			print(f"  [db error] {e}")
-
-	# Step 4 — reconcile
-	reconcile_result = None
 	try:
-		with open(vp_output, 'w', encoding='utf-8') as f:
-			reconcile_result = reconcile_virtual_portfolio(conn, today, f)
+		# Initialise database — creates tables if they don't exist
+		conn = init_database(user_path)
+
+		usd_cad_rate = fetch_usd_cad_rate()
+
+		tickers, weights, total_value, portfolio_rows = load_portfolio(user_path, usd_cad_rate)
+
+		initial_state = {
+			# Run metadata
+			"user_name":  user_name,
+			"user_path":  str(user_path.resolve()),
+			"run_date":   today,
+			"tickers":    tickers,
+			"current_weights":  weights,
+			"cad_usd_rate":		usd_cad_rate,
+			"total_portfolio_value": total_value,
+			"portfolio_rows": portfolio_rows,
+
+			# All agent outputs start as None
+			"raw_text":             None,
+			"summaries":            None,
+			"aaii_sentiment":       None,
+			"fear_greed":           None,
+			"factor_results":    	None,
+			"garch_results":     	None,
+			"mu_sigma":          	None,
+			"valuation":         	None,
+			"financial_health":  	None,
+			"earnings_data":     	None,
+			"earnings_dates":    	None,
+			"covariance_matrix":	None,
+			"cape":					None,
+			"quant_commentary":  	None,
+			"bl_views":             None,
+			"posterior_mu":			None,
+			"recommended_weights":  None,
+			"recommendation_table": None,
+			"advisory_commentary":  None,
+			"mc_current":           None,
+			"mc_port_current":		None,
+			"mc_rebalanced":        None,
+			"sim_commentary":       None,
+			"errors":               [],
+			"report_path":          None,
+			"email_sent":           None,
+		}
+
+		final_state = pipeline_graph.invoke(initial_state)
+		print(f"\n  Keys in final state: {list(final_state.keys())}")
+		print(f"  Agent 1 summaries populated: {final_state['summaries'] is not None}")
+		print(f"  Agent 3 commentary populated: {final_state['advisory_commentary'] is not None}")
+
+		# Print results
+		print(f"\n  Done. Errors: {final_state['errors']}")
+	
+		# Step 3 — persist
+		db_errors = persist_to_database(final_state, conn)
+		if db_errors:
+			for e in db_errors:
+				print(f"  [db error] {e}")
+
+		# Step 4 — reconcile
+		reconcile_result = None
+		try:
+			with open(vp_output, 'w', encoding='utf-8') as f:
+				reconcile_result = reconcile_virtual_portfolio(conn, today, f)
+		except Exception as e:
+			print(f"  [warn] Reconciler failed: {e}")
+
+		# Step 5 — build divergence data for report
+		try:
+			divergence_data = build_divergence_data(conn, today, reconcile_result)
+		except Exception as e:
+			print(f"  [warn] Divergence data build failed: {e}")
+			divergence_data = None
+
+		with open(output_path, 'w', encoding='utf-8') as f:
+			strategies = ["max_sharpe", "min_variance", "risk_parity", "target_return", "robust_mv"]
+			header = f"{'Ticker':<10} {'Current':>8} " + " ".join(f"{s[:10]:>10}" for s in strategies) + f"  {'Consensus':<10}"
+			print(f"\n  Recommendation Table", file=f)
+			print(f"  {header}", file=f)
+			print(f"  {'-' * len(header)}", file=f)
+			for row in final_state["recommendation_table"]:
+				weights = " ".join(
+					f"{row.get(f'{s}_weight', 0.0):>9.1%} " for s in strategies
+				)
+				print(f"  {row['ticker']:<10} {row['current_weight']:>8.1%} {weights} {row.get('consensus_action', 'N/A'):<10}", file=f)
+	
+		charts_dir  = user_path / "data" / f"{today}" / "raw" / "charts"
+		generate_all_charts(final_state, charts_dir)
+
+		generate_report(
+			final_state     = final_state,
+			report_dir      = report_dir,
+			charts_dir      = charts_dir,
+			divergence_data = divergence_data
+		)
+  
+		conn.close()
+	
 	except Exception as e:
-		print(f"  [warn] Reconciler failed: {e}")
-
-	# Step 5 — build divergence data for report
-	try:
-		divergence_data = build_divergence_data(conn, today, reconcile_result)
-	except Exception as e:
-		print(f"  [warn] Divergence data build failed: {e}")
-		divergence_data = None
-
-	with open(output_path, 'w', encoding='utf-8') as f:
-		strategies = ["max_sharpe", "min_variance", "risk_parity", "target_return", "robust_mv"]
-		header = f"{'Ticker':<10} {'Current':>8} " + " ".join(f"{s[:10]:>10}" for s in strategies) + f"  {'Consensus':<10}"
-		print(f"\n  Recommendation Table", file=f)
-		print(f"  {header}", file=f)
-		print(f"  {'-' * len(header)}", file=f)
-		for row in final_state["recommendation_table"]:
-			weights = " ".join(
-				f"{row.get(f'{s}_weight', 0.0):>9.1%} " for s in strategies
-			)
-			print(f"  {row['ticker']:<10} {row['current_weight']:>8.1%} {weights} {row.get('consensus_action', 'N/A'):<10}", file=f)
-   
-	conn.close()
- 
-	charts_dir  = user_path / "data" / f"{today}" / "raw" / "charts"
-	generate_all_charts(final_state, charts_dir)
-
-	pdf_path = generate_report(
-		final_state     = final_state,
-		report_dir      = report_dir,
-		charts_dir      = charts_dir,
-		divergence_data = divergence_data
-	)
+		tb = traceback.format_exc()
+		print(f"\n [ERROR] Pipeline failed for {user_name}: {e}")
+		print(tb)
+		send_error_email(user_name, str(e), tb)
 
 
 def main():
