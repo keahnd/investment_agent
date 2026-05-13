@@ -97,26 +97,30 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 
 
 def run_user(user_path: Path) -> None:
+	user_name = user_path.name
+	print(f"\n{'='*60}")
+	print(f"  Running pipeline for: {user_name}")
+	print(f"{'='*60}")
+
+	today = datetime.today().strftime("%Y-%m-%d")
+	user_email = get_user_email(user_path)
+
+	report_dir = user_path / "reports" / f"{today}"
+	report_dir.mkdir(exist_ok=True)
+	output_path = report_dir / f"recommendation_{today}.txt"
+	vp_output = report_dir / f"virtual_portfolio_{today}.txt"
+	asset_analysis =  report_dir / "asset_analysis"
+	asset_analysis.mkdir(exist_ok=True)
+
 	try:
-		user_name = user_path.name
-		print(f"\n{'='*60}")
-		print(f"  Running pipeline for: {user_name}")
-		print(f"{'='*60}")
-
-		today = datetime.today().strftime("%Y-%m-%d")
-	
-		user_email = get_user_email(user_path)
-	
-		report_dir = user_path / "reports" / f"{today}"
-		report_dir.mkdir(exist_ok=True)
-		output_path = report_dir / f"recommendation_{today}.txt"
-		vp_output = report_dir / f"virtual_portfolio_{today}.txt"
-		asset_analysis =  report_dir / "asset_analysis"
-		asset_analysis.mkdir(exist_ok=True)
-
 		# scrape wealthsimple for up to date holdings
 		scrape_user_holdings(user_path)
- 
+	except Exception as e:
+		print(f"Scraper failed for {user_name}: {e}")
+		send_error_email(user_name, f"Scraper failed — using last CSV for {user_name}: {e}")
+    	# pipeline continues with whatever portfolio.csv already exists
+	
+	try:
 		# Initialise database — creates tables if they don't exist
 		conn = init_database(user_path)
 
