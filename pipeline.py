@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from dotenv import load_dotenv
 import yfinance as yf
+import json
 
 from agents.graph 			import pipeline_graph
 from database.schema		import init_database
@@ -34,6 +35,15 @@ def fetch_usd_cad_rate() -> float:
         pass
     print("  [warn] USD/CAD fetch failed, using fallback rate of 1.36")
     return 1.36
+
+
+def get_user_email(user_path: Path) -> str:
+    config_path = user_path / "config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+            return config["email"]
+            
 
 
 def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
@@ -90,6 +100,8 @@ def run_user(user_path: Path) -> None:
 	print(f"{'='*60}")
 
 	today = datetime.today().strftime("%Y-%m-%d")
+ 
+	user_email = get_user_email(user_path)
  
 	report_dir = user_path / "reports" / f"{today}"
 	report_dir.mkdir(exist_ok=True)
@@ -190,12 +202,14 @@ def run_user(user_path: Path) -> None:
 		charts_dir  = user_path / "data" / f"{today}" / "raw" / "charts"
 		generate_all_charts(final_state, charts_dir)
 
-		generate_report(
+		pdf_path = generate_report(
 			final_state     = final_state,
 			report_dir      = report_dir,
 			charts_dir      = charts_dir,
 			divergence_data = divergence_data
 		)
+  
+		send_report_email(final_state, pdf_path, user_email)
   
 		conn.close()
 	

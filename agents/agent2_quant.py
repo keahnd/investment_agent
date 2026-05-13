@@ -139,7 +139,7 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
             print(f"  [Cache] Updating from {gap_start} to {today}...")
             new_data = _download_with_retry(all_tickers, gap_start, today)
             if not new_data.empty:
-                data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna()
+                data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna(how='all')
                 data.to_parquet(CACHE_FILE)
                 print(f"  [Cache] Updated and saved to {CACHE_FILE}")
             else:

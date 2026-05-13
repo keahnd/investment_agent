@@ -260,6 +260,8 @@ def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
     try:
         response = requests.get(videos_url, headers=HEADERS, timeout=10)
         video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', response.text)))
+        if not video_ids:
+            print(f"    [warn] No videoId matches in response from {channel_url} (status {response.status_code}, {len(response.text)} chars)")
         return [f"https://www.youtube.com/watch?v={vid}" for vid in video_ids[:n]]
     except Exception as e:
         print(f"    [warn] Could not resolve videos from {channel_url}: {e}")
@@ -903,7 +905,10 @@ def agent1_sentiment(state: PipelineState) -> dict:
     for podcast in podcast_sources:
         url = podcast["url"]
         if "/@" in url or "/channel/" in url:
-            video_urls = _resolve_channel_video_urls(url, n=1)
+            video_urls = _resolve_channel_video_urls(url, n=5)
+            if not video_urls:
+                print(f"    [warn] No videos resolved for {podcast['name']} — skipping")
+                continue
         else:
             video_urls = [url]
 
