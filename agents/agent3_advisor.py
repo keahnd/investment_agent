@@ -87,7 +87,14 @@ def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
     risk_aversion  = constraints["risk_aversion"]
     min_w          = 0
     max_w          = constraints["max_allocation_per_asset"]
-    
+
+    # Guard against NaN (e.g. ticker with no price history) and floating-point non-PD noise.
+    sigma = np.nan_to_num(sigma, nan=0.0)
+    eigvals, eigvecs = np.linalg.eigh(sigma)
+    eigvals = np.maximum(eigvals, 1e-8)
+    sigma = (eigvecs @ np.diag(eigvals) @ eigvecs.T)
+    sigma = (sigma + sigma.T) / 2
+
     L = np.linalg.cholesky(sigma)
     w = cp.Variable(n)
 

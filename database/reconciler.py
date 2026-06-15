@@ -3,22 +3,21 @@ from database.schema import init_database, insert_portfolio_row, insert_model_ou
 import requests, zipfile, io
 from curl_cffi import requests
 import time
+import math
+import pandas as pd
 import yfinance as yf
 
-from agents.agent2_quant import fetch_prices
-
-
-TODAY = datetime.today()
+from agents.agent2_quant import fetch_prices, _to_yfinance_ticker
 
 
 def _fetch_opening_prices(tickers, start):
     """
     Fetche opening prices for the tickers from the start date to today
-    
+
     Args:
         tickers: list of tickers
         start: start date
-        
+
     Returns:
         price dataframe
     """
@@ -27,16 +26,22 @@ def _fetch_opening_prices(tickers, start):
     for attempt in range(5):
         wait = 30 * (attempt + 1)   # 30s, 60s, 90s, 120s, 150s
         try:
+            end = datetime.today() + timedelta(days=1)
             session = requests.Session(impersonate="chrome")
+            yf_tickers = [_to_yfinance_ticker(t) for t in tickers]
+            back_map   = {yf_t: orig for orig, yf_t in zip(tickers, yf_tickers)}
             data = yf.download(
-                tickers, start=start, end=TODAY,
+                yf_tickers, start=start, end=end,
                 auto_adjust=True, progress=False, threads=False, session=session
             )['Open']
             if data.empty:
                 raise ValueError("Download returned empty DataFrame (likely rate limited).")
-            
+            data = data.rename(columns=back_map)
+            if data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
+
             opening_prices = data.apply(lambda col: col.dropna().iloc[0] if not col.dropna().empty else None)
-            missing = [t for t, p in opening_prices.items() if p is None]
+            missing = [t for t, p in opening_prices.items() if p is None or (hasattr(p, '__float__') and pd.isna(p))]
             if missing:
                 print(f"  [WARN] No opening price found for {missing}, extending start by 1 days...")
                 start = start - timedelta(days=1)
@@ -130,13 +135,20 @@ def _build_virtual_portfolio(last_rec, opening_vp_value, opening_prices):
 
     virtual_portfolio = {}
     for ticker, weight, strategy in last_rec:
+        price = opening_prices.get(ticker) if hasattr(opening_prices, "get") else opening_prices[ticker]
+        if price is None or (isinstance(price, float) and (math.isnan(price) or price == 0.0)):
+            print(f"  [WARN] {ticker}: invalid opening price ({price}) — skipping from VP build.")
+            continue
         total_w = sum(weights_by_strategy[strategy].values())
+        if total_w == 0:
+            print(f"  [WARN] {strategy}: all weights are zero — skipping VP build for this strategy.")
+            continue
         normalised_weight = weight / total_w
-        market_value = opening_vp_value[strategy] * normalised_weight
+        market_value = opening_vp_value.get(strategy, 0.0) * normalised_weight
         virtual_portfolio.setdefault(strategy, {})[ticker] = {
             "weight": normalised_weight,
-            "shares": market_value / opening_prices[ticker],
-            "price": opening_prices[ticker],
+            "shares": market_value / price,
+            "price": price,
             "market_value": market_value,
         }
     return virtual_portfolio
@@ -156,13 +168,25 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
         file: File object to write warnings to
 
     Returns:
-        {strategy: {ticker: {weight, shares, price, market_value}}}
+        Tuple of ({strategy: {ticker: {weight, shares, price, market_value}}}, freshly_created: bool)
     """
     today_str = today if isinstance(today, str) else today.isoformat()
     opening_date_str = opening_date.strftime("%Y-%m-%d") if isinstance(opening_date, datetime) else opening_date
 
-    if conn.execute("SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (opening_date_str,)).fetchone()[0] > 0:
-        print(f"  [WARN] Virtual portfolio already written for {opening_date_str}. Loading from DB.", file=file)
+    existing = conn.execute("SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (opening_date_str,)).fetchone()[0]
+    valid_shares = conn.execute(
+        "SELECT COUNT(*) FROM virtual_portfolio WHERE date = ? AND quantity IS NOT NULL AND quantity != 0",
+        (opening_date_str,)
+    ).fetchone()[0]
+
+    if existing > 0 and valid_shares == 0:
+        print(f"  [WARN] Stored VP for {opening_date_str} has all-NULL/zero shares. Deleting and rebuilding.", file=file)
+        conn.execute("DELETE FROM virtual_portfolio WHERE date = ?", (opening_date_str,))
+        conn.commit()
+        existing = 0
+
+    if existing > 0:
+        print(f"  [INFO] Virtual portfolio already written for {opening_date_str}. Loading from DB.", file=file)
         rows = conn.execute("SELECT ticker, strategy, weight, price, quantity, market_value FROM virtual_portfolio WHERE date = ?",
                             (opening_date_str,)).fetchall()
         virtual_portfolio = {}
@@ -170,7 +194,7 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
             virtual_portfolio.setdefault(strategy, {})[ticker] = {
                 "weight": weight, "shares": shares, "price": price, "market_value": market_value,
             }
-        return virtual_portfolio
+        return virtual_portfolio, False
 
     tickers = {ticker for ticker, _, _ in last_rec}
     opening_prices = _fetch_opening_prices(tickers, opening_date)
@@ -188,9 +212,25 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
         last_vp = conn.execute("SELECT ticker, price, quantity, strategy FROM virtual_portfolio WHERE date = ?", (last_vp_date,)).fetchall()
         for ticker, price, shares, strategy in last_vp:
             curr = opening_prices.get(ticker)
-            if curr and abs(curr - price) > 0.25 * price:
+            if curr is None or pd.isna(curr) or shares is None or pd.isna(shares):
+                print(f"  [WARN] {ticker}: missing/NaN opening price or shares — skipping from value calculation.", file=file)
+                continue
+            if abs(curr - price) > 0.25 * price:
                 print(f"  [WARN] {ticker} moved >25% since last VP entry.", file=file)
-            opening_vp_value[strategy] = opening_vp_value.get(strategy, 0) + shares * opening_prices[ticker]
+            opening_vp_value[strategy] = opening_vp_value.get(strategy, 0) + shares * curr
+            
+	# Fallback: seed any strategy with 0/NaN opening value from the real portfolio total.
+    strategies_in_rec = {strategy for _, _, strategy in last_rec}
+    rp_total = None
+    for strategy in strategies_in_rec:
+        val = opening_vp_value.get(strategy)
+        if val is None or val == 0.0 or (isinstance(val, float) and math.isnan(val)):
+            if rp_total is None:
+                rp_total = conn.execute(
+                    "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today_str,)
+                ).fetchone()[0] or 0.0
+            opening_vp_value[strategy] = rp_total
+            print(f"  [INFO] {strategy}: no valid opening VP value — seeding from real portfolio (${rp_total:,.2f})", file=file)
 
     virtual_portfolio = _build_virtual_portfolio(last_rec, opening_vp_value, opening_prices)
 
@@ -200,7 +240,7 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
             print(f"  [WARN] {strategy} VP value mismatch: computed={computed:.2f}, expected={opening_vp_value[strategy]:.2f}", file=file)
 
     insert_virtual_portfolio(conn, opening_date, virtual_portfolio)
-    return virtual_portfolio
+    return virtual_portfolio, True
 
 
 def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
@@ -241,8 +281,9 @@ def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
     print(f"\n  {'Strategy':<15} {'Virtual Ret':>13} {'$ Diverg':>12} {'% Diverg':>12} {'$ Value':>12}", file=file)
     print(f"  {'-'*68}", file=file)
     for s in curr_vp_values:
-        vp_ret = f"{virtual_pct_change[s]:>+13.2%}" if virtual_pct_change[s] is not None else f"{'N/A':>12}"
-        print(f"  {s:<15} {vp_ret}  {dollar_divergence[s]:>+12.2f} {return_pct_divergence[s]:>+12.2%} {curr_vp_values[s]:>12,.2f}", file=file)
+        vp_ret  = f"{virtual_pct_change[s]:>+13.2%}" if virtual_pct_change[s] is not None else f"{'N/A':>12}"
+        pct_div = f"{return_pct_divergence[s]:>+12.2%}" if return_pct_divergence[s] is not None else f"{'N/A':>12}"
+        print(f"  {s:<15} {vp_ret}  {dollar_divergence[s]:>+12.2f} {pct_div} {curr_vp_values[s]:>12,.2f}", file=file)
 
     print(f"\n  KEY ASSET CONTRIBUTIONS", file=file)
     print(f"  Contrib = (Virtual Weight - Real Weight) x Ticker Return.", file=file)
@@ -255,8 +296,11 @@ def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
         for ticker, pos in positions.items():
             if ticker not in raw_prices.columns:
                 continue
+            entry_price = pos["price"]
+            if not entry_price or (isinstance(entry_price, float) and (math.isnan(entry_price) or entry_price == 0.0)):
+                continue
             curr_price = float(raw_prices[ticker].dropna().iloc[-1])
-            ret = (curr_price - pos["price"]) / pos["price"]
+            ret = (curr_price - entry_price) / entry_price
             virt_w = pos["weight"]
             real_w = real_weights.get(ticker, 0.0)
             contributions.append((ticker, virt_w, real_w, ret, (virt_w - real_w) * ret))
@@ -265,16 +309,18 @@ def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
             print(f"  {ticker:<10} {virt_w:>9.1%} {real_w:>9.1%} {virt_w-real_w:>+9.1%} {ret:>+9.2%} {contrib:>+10.2%}", file=file)
 
     history = conn.execute("""
-        SELECT v.date, v.strategy, SUM(v.market_value), p.rp_val
+        SELECT DATE(v.date), v.strategy, SUM(v.market_value), p.rp_val
         FROM virtual_portfolio v
-        JOIN (SELECT date, SUM(market_value) AS rp_val FROM portfolios GROUP BY date) p
-            ON v.date = p.date
-        GROUP BY v.date, v.strategy ORDER BY v.date
+        JOIN (SELECT DATE(date) AS date, SUM(market_value) AS rp_val FROM portfolios GROUP BY DATE(date)) p
+            ON DATE(v.date) = p.date
+        GROUP BY DATE(v.date), v.strategy ORDER BY DATE(v.date)
     """).fetchall()
 
     print(f"\n  CUMULATIVE DIVERGENCE HISTORY", file=file)
     print(f"  {'Date':<12} {'Strategy':<15} {'VP Value':>12} {'RP Value':>12} {'Divergence':>12}", file=file)
     for date, strategy, vp_val, rp_val in history:
+        if vp_val is None or rp_val is None:
+            continue
         print(f"  {date:<12} {strategy:<15} {vp_val:>12.2f} {rp_val:>12.2f} {vp_val - rp_val:>+12.2f}", file=file)
 
     print(f"\n{'='*70}", file=file)
@@ -320,13 +366,16 @@ def reconcile_virtual_portfolio(conn, today, file=None):
                                        (last_vp_date,)).fetchall()) if last_vp_date else {}
     last_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (last_rec_date,)).fetchone()[0] or 0.0
 
-    virtual_portfolio = _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file)
+    virtual_portfolio, freshly_created = _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file)
+    if freshly_created:
+        last_vp_values = {}
 
     curr_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today,)).fetchone()[0] or 0.0
     curr_vp_values = {
         s: sum(pos["shares"] * float(raw_prices[t].dropna().iloc[-1])
-               for t, pos in tickers.items() if t in raw_prices.columns)
-        for s, tickers in virtual_portfolio.items()
+               for t, pos in positions.items()
+               if t in raw_prices.columns and pos["shares"] is not None and pos["shares"] != 0)
+        for s, positions in virtual_portfolio.items()
     }
     real_weights = dict(conn.execute("SELECT ticker, weight FROM portfolios WHERE date = ?", (today,)).fetchall())
 
@@ -364,7 +413,7 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
 
     # Need either live reconcile data or a DB VP snapshot
     curr_vp_date = conn.execute(
-        "SELECT MAX(date) FROM virtual_portfolio WHERE market_value > 0"
+        "SELECT MAX(DATE(date)) FROM virtual_portfolio WHERE market_value > 0"
     ).fetchone()[0]
 
     if (not reconcile_result and not curr_vp_date) or not has_rp:
@@ -375,10 +424,14 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
         "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today,)
     ).fetchone()[0] or 0.0
 
-    # Last real portfolio value — most recent date before today
+    # Last real portfolio value — use the latest VP date
     last_rp_date = conn.execute(
-        "SELECT MAX(date) FROM portfolios WHERE date < ?", (today,)
+        "SELECT MIN(DATE(date)) FROM virtual_portfolio WHERE market_value > 0"
     ).fetchone()[0]
+    if not last_rp_date:
+        last_rp_date = conn.execute(
+            "SELECT MAX(DATE(date)) FROM portfolios WHERE date < ?", (today,)
+        ).fetchone()[0]
 
     last_rp_value = 0.0
     if last_rp_date:
@@ -396,15 +449,20 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
     if reconcile_result:
         curr_vp = reconcile_result["curr_vp_values"]
         last_vp = reconcile_result["last_vp_values"]
+        # Fallback: VP seeded today, no prior DB snapshot exists yet.
+        # Derive opening values from pos["market_value"] = shares × opening_price.
+        if not last_vp and reconcile_result.get("virtual_portfolio"):
+            for strategy, positions in reconcile_result["virtual_portfolio"].items():
+                last_vp[strategy] = sum(pos["market_value"] for pos in positions.values())
     else:
         curr_vp_rows = conn.execute("""
             SELECT strategy, SUM(market_value) as total
-            FROM virtual_portfolio WHERE date = ? GROUP BY strategy
+            FROM virtual_portfolio WHERE DATE(date) = ? GROUP BY strategy
         """, (curr_vp_date,)).fetchall()
         curr_vp = {row[0]: row[1] for row in curr_vp_rows}
 
         last_vp_date = conn.execute(
-            "SELECT MAX(date) FROM virtual_portfolio WHERE date < ? AND market_value > 0",
+            "SELECT MAX(DATE(date)) FROM virtual_portfolio WHERE date < ? AND market_value > 0",
             (curr_vp_date,)
         ).fetchone()[0]
         last_vp = {}
@@ -442,8 +500,11 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
             for ticker, pos in positions.items():
                 if ticker not in raw_prices.columns:
                     continue
+                entry_price = pos["price"]
+                if not entry_price or (isinstance(entry_price, float) and (math.isnan(entry_price) or entry_price == 0.0)):
+                    continue
                 curr_price = float(raw_prices[ticker].dropna().iloc[-1])
-                ret        = (curr_price - pos["price"]) / pos["price"]
+                ret        = (curr_price - entry_price) / entry_price
                 virt_w     = pos["weight"]
                 real_w     = real_weights.get(ticker, 0.0)
                 rows.append((ticker, virt_w, real_w, ret, (virt_w - real_w) * ret))
@@ -451,17 +512,17 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
 
     # Cumulative history
     history = conn.execute("""
-        SELECT v.date, v.strategy,
+        SELECT DATE(v.date), v.strategy,
                SUM(v.market_value) as vp_val,
                p.rp_val
         FROM virtual_portfolio v
         JOIN (
-            SELECT date, SUM(market_value) AS rp_val
+            SELECT DATE(date) AS date, SUM(market_value) AS rp_val
             FROM portfolios
-            GROUP BY date
-        ) p ON v.date = p.date
-        GROUP BY v.date, v.strategy
-        ORDER BY v.date DESC
+            GROUP BY DATE(date)
+        ) p ON DATE(v.date) = p.date
+        GROUP BY DATE(v.date), v.strategy
+        ORDER BY DATE(v.date) DESC
         LIMIT 100
     """).fetchall()
 

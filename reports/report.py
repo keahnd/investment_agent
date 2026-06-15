@@ -497,6 +497,8 @@ def _section_virtual_portfolio(pdf: PortfolioReport, divergence_data: dict):
 
 		for row in history[:20]:
 			d, strat, vp, rp = row[0], row[1], row[2], row[3]
+			if vp is None or rp is None:
+				continue
 			divergence = vp - rp
 
 			pdf.set_font("Helvetica", "", FS_TINY)

@@ -96,7 +96,7 @@ def init_database(user_path):
 					total_value     REAL,
 					PRIMARY KEY (date, ticker, strategy)
 				)""")
-    
+	
 	cursor.execute("""
 		CREATE TABLE IF NOT EXISTS bl_views (
 			date                TEXT NOT NULL,
@@ -115,13 +115,13 @@ def init_database(user_path):
 		CREATE TABLE IF NOT EXISTS portfolio_simulations (
 			date			TEXT NOT NULL, 
    			strategy		TEXT NOT NULL, 
-      		p25				REAL, 
-        	p50				REAL, 
-         	p75				REAL,
+	  		p25				REAL, 
+			p50				REAL, 
+		 	p75				REAL,
 			p95				REAL,
 			var_95			REAL, 
    			cvar_95			REAL, 
-      		prob_up			REAL, 
+	  		prob_up			REAL, 
 			expected_value  REAL,
 			PRIMARY KEY (date, strategy)
 		)""")
@@ -130,45 +130,45 @@ def init_database(user_path):
 	return con
 
 def insert_portfolio_row(conn, date, ticker, quantity, avg_cost, asset_class,
-                        	market_price, market_value, weight):
-    """
-    Inserts or replaces a single row in the portfolios table.
+							market_price, market_value, weight):
+	"""
+	Inserts or replaces a single row in the portfolios table.
 
-    Args:
-        conn: Active database connection
-        date: Date of the snapshot (YYYY-MM-DD string)
-        ticker: Asset ticker symbol
-        quantity: Number of shares held
-        avg_cost: Average cost per share
-        asset_class: Asset class label (e.g. 'Equity', 'Fixed Income')
-        market_price: Latest market price
-        market_value: Total market value (quantity * market_price)
-        weight: Portfolio weight (0–1)
-    """
-    # OR REPLACE IS FOR TESTING
-    conn.execute("""
+	Args:
+		conn: Active database connection
+		date: Date of the snapshot (YYYY-MM-DD string)
+		ticker: Asset ticker symbol
+		quantity: Number of shares held
+		avg_cost: Average cost per share
+		asset_class: Asset class label (e.g. 'Equity', 'Fixed Income')
+		market_price: Latest market price
+		market_value: Total market value (quantity * market_price)
+		weight: Portfolio weight (0–1)
+	"""
+	# OR REPLACE IS FOR TESTING
+	conn.execute("""
 		INSERT OR REPLACE INTO portfolios						
 			(date, ticker, quantity, avg_cost, asset_class,
 			market_price, market_value, weight)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		""", (date, ticker, quantity, avg_cost, asset_class,
 				market_price, market_value, weight))
-    
-    conn.commit()
-    
+	
+	conn.commit()
+	
 def insert_model_output(conn, date, ticker, params: dict):
-    """
-    Inserts or replaces a full model output row for a ticker.
+	"""
+	Inserts or replaces a full model output row for a ticker.
 
-    Args:
-        conn: Active database connection
-        date: Date of the run (YYYY-MM-DD string)
-        ticker: Asset ticker symbol
-        params: Dict of model outputs keyed by column name (factor model,
-                GARCH, Monte Carlo, and valuation fields)
-    """
-    # OR REPLACE IS FOR TESTING
-    conn.execute("""
+	Args:
+		conn: Active database connection
+		date: Date of the run (YYYY-MM-DD string)
+		ticker: Asset ticker symbol
+		params: Dict of model outputs keyed by column name (factor model,
+				GARCH, Monte Carlo, and valuation fields)
+	"""
+	# OR REPLACE IS FOR TESTING
+	conn.execute("""
 		INSERT OR REPLACE INTO model_outputs (date, ticker, alpha_daily, beta_mkt, beta_smb,
 			beta_hml, r_squared, alpha_pval, garch_omega, garch_alpha, garch_beta,
 			garch_persistence, garch_longrun_vol, garch_current_vol, mu_annual,
@@ -182,49 +182,52 @@ def insert_model_output(conn, date, ticker, params: dict):
 			:forward_pe, :ttm_pe, :peg_ratio, :ev_ebitda, :target_price,	:analyst_rec, :ma_200,
 			:ma_50, :earnings_growth, :revenue_growth, :sector, :industry, :cape)
 	""", {"date": date, "ticker": ticker, **params})
-    
-    conn.commit()
-    
+	
+	conn.commit()
+	
 def insert_recommendation(conn, date, ticker, strategy, current_w,
-                           recommended_w, action, mu, sigma):
-    """
-    Inserts or replaces a rebalancing recommendation for a ticker and strategy.
+						   recommended_w, action, mu, sigma):
+	"""
+	Inserts or replaces a rebalancing recommendation for a ticker and strategy.
 
-    Args:
-        conn: Active database connection
-        date: Date of the recommendation (YYYY-MM-DD string)
-        ticker: Asset ticker symbol
-        strategy: Optimisation strategy name (e.g. 'Max Sharpe', 'Min Vol')
-        current_w: Current portfolio weight (0–1)
-        recommended_w: Target weight from optimiser (0–1)
-        action: Signal string ('BUY', 'SELL', or 'HOLD')
-        mu: Annualised expected return
-        sigma: Annualised volatility
-    """
-    # OR REPLACE IS FOR TESTING
-    conn.execute("""
-        INSERT OR REPLACE INTO recommendations
-            (date, ticker, strategy, current_weight, recommended_weight,
-             action, mu_annual, sigma_annual)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (date, ticker, strategy, current_w, recommended_w, action, mu, sigma))
-    conn.commit()
-    
+	Args:
+		conn: Active database connection
+		date: Date of the recommendation (YYYY-MM-DD string)
+		ticker: Asset ticker symbol
+		strategy: Optimisation strategy name (e.g. 'Max Sharpe', 'Min Vol')
+		current_w: Current portfolio weight (0–1)
+		recommended_w: Target weight from optimiser (0–1)
+		action: Signal string ('BUY', 'SELL', or 'HOLD')
+		mu: Annualised expected return
+		sigma: Annualised volatility
+	"""
+	# OR REPLACE IS FOR TESTING
+	conn.execute("""
+		INSERT OR REPLACE INTO recommendations
+			(date, ticker, strategy, current_weight, recommended_weight,
+			 action, mu_annual, sigma_annual)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	""", (date, ticker, strategy, current_w, recommended_w, action, mu, sigma))
+	conn.commit()
+	
 def insert_virtual_portfolio(conn, date, positions):
-    """
-    Write the virtual portfolio positions to the database.
-    
-    Args:  
-        conn: Connection to database
-        date: The date of the write
-        positions: dictionary of portfolio positions
-    """
-    for strategy, tickers in positions.items():
-        total_value = sum(p["market_value"] for p in tickers.values())
-        for ticker, p in tickers.items():
-            conn.execute("""
-                INSERT OR REPLACE INTO virtual_portfolio
-                    (date, ticker, strategy, weight, price, quantity, market_value, total_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (date, ticker, strategy, p["weight"], p["price"], p["shares"], p["market_value"], total_value))
-    conn.commit()
+	"""
+	Write the virtual portfolio positions to the database.
+
+	Args:
+		conn: Connection to database
+		date: The date of the write
+		positions: dictionary of portfolio positions
+	"""
+	# Normalize to YYYY-MM-DD string so date equality queries work correctly.
+	if hasattr(date, "strftime"):
+		date = date.strftime("%Y-%m-%d")
+	for strategy, tickers in positions.items():
+		total_value = sum(p["market_value"] for p in tickers.values())
+		for ticker, p in tickers.items():
+			conn.execute("""
+				INSERT OR REPLACE INTO virtual_portfolio
+					(date, ticker, strategy, weight, price, quantity, market_value, total_value)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			""", (date, ticker, strategy, p["weight"], p["price"], p["shares"], p["market_value"], total_value))
+	conn.commit()

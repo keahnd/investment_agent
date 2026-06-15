@@ -129,6 +129,14 @@ def port_monte_carlo(mu: np.ndarray, covar_ann: np.ndarray, init_port_value: flo
     weights = np.array(weights)
     df_ch = 6
     ch_scale = np.sqrt((df_ch - 2) / df_ch)
+    # Replace any NaN (e.g. from a ticker with no price history) with 0 before decomposition.
+    # eigh produces NaN eigenvalues from NaN input, so nan_to_num must come first.
+    covar_ann = np.nan_to_num(covar_ann, nan=0.0)
+    # Clip negative eigenvalues — safeguard against floating-point noise from dict round-trip.
+    eigvals, eigvecs = np.linalg.eigh(covar_ann)
+    eigvals = np.maximum(eigvals, 1e-8)
+    covar_ann = (eigvecs @ np.diag(eigvals) @ eigvecs.T)
+    covar_ann = (covar_ann + covar_ann.T) / 2
     L = np.linalg.cholesky(covar_ann)
     dt_sim = 1 / 252
     
@@ -534,6 +542,10 @@ def agent4_simulator(state: PipelineState) -> dict:
         dir_name = ticker.removesuffix(".TO")
         (sum_dir / dir_name).mkdir(parents=True, exist_ok=True)
         with open(sum_dir / dir_name / "sim.txt", "w", encoding="utf-8") as f:
+            if not state_info.get("s_current"):
+                print(f"  [WARN] No valid price for {ticker} — skipping simulation.")
+                mc_current[ticker] = {}
+                continue
             mc_current[ticker] = run_monte_carlo(
                 state_info["mu_annual"], state_info["sigma_annual"], state_info["s_current"], file=f
             )

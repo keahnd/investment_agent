@@ -244,10 +244,13 @@ def fetch_fear_greed() -> dict:
 
 def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
     """
-    Resolves the most recent video URLs from a YouTube channel page.
+    Resolves the most recent video URLs from a YouTube channel.
 
-    Fetches the channel's /videos page and extracts video IDs from the
-    embedded JSON, deduplicating in order of appearance.
+    Strategy:
+    1. Fetch the channel page to extract the channel ID.
+    2. Use the YouTube RSS feed (/feeds/videos.xml?channel_id=...) to get
+       video IDs — this is stable, requires no JS, and no API key.
+    3. Fall back to regex on the raw page HTML if the RSS approach fails.
 
     Args:
         channel_url: YouTube channel URL in /@Handle or /channel/ID format.
@@ -256,13 +259,30 @@ def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
     Returns:
         List of YouTube watch URLs (up to n). Returns empty list on failure.
     """
-    videos_url = channel_url.rstrip("/") + "/videos"
+    base_url = channel_url.rstrip("/")
     try:
-        response = requests.get(videos_url, headers=HEADERS, timeout=10)
-        video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', response.text)))
+        # Step 1: fetch channel page to find channel ID
+        page = requests.get(base_url, headers=HEADERS, timeout=10)
+        if page.status_code == 404:
+            print(f"    [warn] Channel not found (404): {base_url} — check the handle in config.json")
+            return []
+
+        # Step 2: extract channel ID from the page HTML
+        channel_id_match = re.search(r'"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"', page.text)
+        if channel_id_match:
+            channel_id = channel_id_match.group(1)
+            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+            rss = requests.get(rss_url, headers=HEADERS, timeout=10)
+            video_ids = re.findall(r"<yt:videoId>([a-zA-Z0-9_-]{11})</yt:videoId>", rss.text)
+            if video_ids:
+                return [f"https://www.youtube.com/watch?v={vid}" for vid in video_ids[:n]]
+
+        # Step 3: fallback — regex on the raw page JSON
+        video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', page.text)))
         if not video_ids:
-            print(f"    [warn] No videoId matches in response from {channel_url} (status {response.status_code}, {len(response.text)} chars)")
+            print(f"    [warn] No videos found for {base_url} (status {page.status_code}) — handle may be wrong")
         return [f"https://www.youtube.com/watch?v={vid}" for vid in video_ids[:n]]
+
     except Exception as e:
         print(f"    [warn] Could not resolve videos from {channel_url}: {e}")
     return []
@@ -913,6 +933,8 @@ def agent1_sentiment(state: PipelineState) -> dict:
             video_urls = [url]
 
         for video_url in video_urls:
+            # Sleep for a bit to prevent youtube rate limiting
+            time.sleep(5)
             transcript = fetch_youtube_transcript(video_url, podcast["name"])
 
             if transcript:
