@@ -48,8 +48,9 @@ def _fetch_opening_prices(tickers, start):
                 # This could result in grabbing opening prices BEFORE the recommendation ran. Giving the
                 # VP false price values to work off of.
                 continue
-
-            return opening_prices
+            
+            actual_date = data.dropna(how='all').index[0].date()
+            return opening_prices, actual_date
 
         except Exception as e:
             if attempt < 4:
@@ -170,25 +171,28 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
     Returns:
         Tuple of ({strategy: {ticker: {weight, shares, price, market_value}}}, freshly_created: bool)
     """
+    tickers = {ticker for ticker, _, _ in last_rec}
     today_str = today if isinstance(today, str) else today.isoformat()
-    opening_date_str = opening_date.strftime("%Y-%m-%d") if isinstance(opening_date, datetime) else opening_date
 
-    existing = conn.execute("SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (opening_date_str,)).fetchone()[0]
+    opening_prices, actual_opening_date = _fetch_opening_prices(tickers, opening_date)
+    actual_opening_date_str = actual_opening_date.strftime("%Y-%m-%d")
+
+    existing = conn.execute("SELECT COUNT(*) FROM virtual_portfolio WHERE date = ?", (actual_opening_date_str,)).fetchone()[0]
     valid_shares = conn.execute(
         "SELECT COUNT(*) FROM virtual_portfolio WHERE date = ? AND quantity IS NOT NULL AND quantity != 0",
-        (opening_date_str,)
+        (actual_opening_date_str,)
     ).fetchone()[0]
 
     if existing > 0 and valid_shares == 0:
-        print(f"  [WARN] Stored VP for {opening_date_str} has all-NULL/zero shares. Deleting and rebuilding.", file=file)
-        conn.execute("DELETE FROM virtual_portfolio WHERE date = ?", (opening_date_str,))
+        print(f"  [WARN] Stored VP for {actual_opening_date_str} has all-NULL/zero shares. Deleting and rebuilding.", file=file)
+        conn.execute("DELETE FROM virtual_portfolio WHERE date = ?", (actual_opening_date_str,))
         conn.commit()
         existing = 0
 
     if existing > 0:
-        print(f"  [INFO] Virtual portfolio already written for {opening_date_str}. Loading from DB.", file=file)
+        print(f"  [INFO] Virtual portfolio already written for {actual_opening_date_str}. Loading from DB.", file=file)
         rows = conn.execute("SELECT ticker, strategy, weight, price, quantity, market_value FROM virtual_portfolio WHERE date = ?",
-                            (opening_date_str,)).fetchall()
+                            (actual_opening_date_str,)).fetchall()
         virtual_portfolio = {}
         for ticker, strategy, weight, price, shares, market_value in rows:
             virtual_portfolio.setdefault(strategy, {})[ticker] = {
@@ -196,41 +200,14 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
             }
         return virtual_portfolio, False
 
-    tickers = {ticker for ticker, _, _ in last_rec}
-    opening_prices = _fetch_opening_prices(tickers, opening_date)
-
     opening_vp_value = {}
-    if last_vp_date is None:
-        # First VP run — seed each strategy with the real portfolio's total value
-        rp_total = conn.execute(
-            "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today_str,)
-        ).fetchone()[0] or 0.0
-        strategies = {strategy for _, _, strategy in last_rec}
-        for strategy in strategies:
-            opening_vp_value[strategy] = rp_total
-    else:
-        last_vp = conn.execute("SELECT ticker, price, quantity, strategy FROM virtual_portfolio WHERE date = ?", (last_vp_date,)).fetchall()
-        for ticker, price, shares, strategy in last_vp:
-            curr = opening_prices.get(ticker)
-            if curr is None or pd.isna(curr) or shares is None or pd.isna(shares):
-                print(f"  [WARN] {ticker}: missing/NaN opening price or shares — skipping from value calculation.", file=file)
-                continue
-            if abs(curr - price) > 0.25 * price:
-                print(f"  [WARN] {ticker} moved >25% since last VP entry.", file=file)
-            opening_vp_value[strategy] = opening_vp_value.get(strategy, 0) + shares * curr
-            
-	# Fallback: seed any strategy with 0/NaN opening value from the real portfolio total.
-    strategies_in_rec = {strategy for _, _, strategy in last_rec}
-    rp_total = None
-    for strategy in strategies_in_rec:
-        val = opening_vp_value.get(strategy)
-        if val is None or val == 0.0 or (isinstance(val, float) and math.isnan(val)):
-            if rp_total is None:
-                rp_total = conn.execute(
-                    "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today_str,)
-                ).fetchone()[0] or 0.0
-            opening_vp_value[strategy] = rp_total
-            print(f"  [INFO] {strategy}: no valid opening VP value — seeding from real portfolio (${rp_total:,.2f})", file=file)
+    # seed each strategy with the real portfolio's total value
+    rp_total = conn.execute(
+        "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today_str,)
+    ).fetchone()[0] or 0.0
+    strategies = {strategy for _, _, strategy in last_rec}
+    for strategy in strategies:
+        opening_vp_value[strategy] = rp_total
 
     virtual_portfolio = _build_virtual_portfolio(last_rec, opening_vp_value, opening_prices)
 
@@ -239,7 +216,7 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
         if abs(computed - opening_vp_value[strategy]) > 0.01:
             print(f"  [WARN] {strategy} VP value mismatch: computed={computed:.2f}, expected={opening_vp_value[strategy]:.2f}", file=file)
 
-    insert_virtual_portfolio(conn, opening_date, virtual_portfolio)
+    insert_virtual_portfolio(conn, actual_opening_date, virtual_portfolio, rp_total)
     return virtual_portfolio, True
 
 
@@ -308,20 +285,24 @@ def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
         for ticker, virt_w, real_w, ret, contrib in sorted(contributions, key=lambda x: abs(x[4]), reverse=True)[:10]:
             print(f"  {ticker:<10} {virt_w:>9.1%} {real_w:>9.1%} {virt_w-real_w:>+9.1%} {ret:>+9.2%} {contrib:>+10.2%}", file=file)
 
-    history = conn.execute("""
-        SELECT DATE(v.date), v.strategy, SUM(v.market_value), p.rp_val
-        FROM virtual_portfolio v
-        JOIN (SELECT DATE(date) AS date, SUM(market_value) AS rp_val FROM portfolios GROUP BY DATE(date)) p
-            ON DATE(v.date) = p.date
-        GROUP BY DATE(v.date), v.strategy ORDER BY DATE(v.date)
+    cumulative = conn.execute("""
+        SELECT strategy, SUM(div) as total_divergence
+        FROM (
+            SELECT strategy, MAX(divergence) as div
+            FROM virtual_portfolio
+            WHERE market_value > 0 AND divergence IS NOT NULL
+            GROUP BY DATE(date), strategy
+        )
+        GROUP BY strategy
+        ORDER BY strategy
     """).fetchall()
 
-    print(f"\n  CUMULATIVE DIVERGENCE HISTORY", file=file)
-    print(f"  {'Date':<12} {'Strategy':<15} {'VP Value':>12} {'RP Value':>12} {'Divergence':>12}", file=file)
-    for date, strategy, vp_val, rp_val in history:
-        if vp_val is None or rp_val is None:
+    print(f"\n  CUMULATIVE DIVERGENCE", file=file)
+    print(f"  {'Strategy':<20} {'Total Divergence':>16}", file=file)
+    for strategy, total_div in cumulative:
+        if total_div is None:
             continue
-        print(f"  {date:<12} {strategy:<15} {vp_val:>12.2f} {rp_val:>12.2f} {vp_val - rp_val:>+12.2f}", file=file)
+        print(f"  {strategy:<20} {total_div:>+16.2f}", file=file)
 
     print(f"\n{'='*70}", file=file)
 
@@ -424,14 +405,9 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
         "SELECT SUM(market_value) FROM portfolios WHERE date = ?", (today,)
     ).fetchone()[0] or 0.0
 
-    # Last real portfolio value — use the latest VP date
     last_rp_date = conn.execute(
-        "SELECT MIN(DATE(date)) FROM virtual_portfolio WHERE market_value > 0"
+        "SELECT MAX(DATE(date)) FROM portfolios WHERE date < ?", (today,)
     ).fetchone()[0]
-    if not last_rp_date:
-        last_rp_date = conn.execute(
-            "SELECT MAX(DATE(date)) FROM portfolios WHERE date < ?", (today,)
-        ).fetchone()[0]
 
     last_rp_value = 0.0
     if last_rp_date:
@@ -510,28 +486,26 @@ def build_divergence_data(conn, today: str, reconcile_result: dict = None) -> di
                 rows.append((ticker, virt_w, real_w, ret, (virt_w - real_w) * ret))
             contributions[strategy] = sorted(rows, key=lambda x: abs(x[4]), reverse=True)[:10]
 
-    # Cumulative history
-    history = conn.execute("""
-        SELECT DATE(v.date), v.strategy,
-               SUM(v.market_value) as vp_val,
-               p.rp_val
-        FROM virtual_portfolio v
-        JOIN (
-            SELECT DATE(date) AS date, SUM(market_value) AS rp_val
-            FROM portfolios
-            GROUP BY DATE(date)
-        ) p ON DATE(v.date) = p.date
-        GROUP BY DATE(v.date), v.strategy
-        ORDER BY DATE(v.date) DESC
-        LIMIT 100
+    # Cumulative divergence per strategy
+    cumulative_rows = conn.execute("""
+        SELECT strategy, SUM(div) as total_divergence
+        FROM (
+            SELECT strategy, MAX(divergence) as div
+            FROM virtual_portfolio
+            WHERE market_value > 0 AND divergence IS NOT NULL
+            GROUP BY DATE(date), strategy
+        )
+        GROUP BY strategy
+        ORDER BY strategy
     """).fetchall()
+    cumulative_divergence = {row[0]: row[1] for row in cumulative_rows if row[1] is not None}
 
     return {
-        "today":           today,
-        "curr_rp_value":   curr_rp_value,
-        "last_rp_value":   last_rp_value,
-        "real_return":     real_return,
-        "strategies":      strategies,
-        "contributions":   contributions,
-        "history":         history,
+        "today":                 today,
+        "curr_rp_value":         curr_rp_value,
+        "last_rp_value":         last_rp_value,
+        "real_return":           real_return,
+        "strategies":            strategies,
+        "contributions":         contributions,
+        "cumulative_divergence": cumulative_divergence,
     }

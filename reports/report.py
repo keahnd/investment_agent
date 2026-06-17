@@ -480,40 +480,25 @@ def _section_virtual_portfolio(pdf: PortfolioReport, divergence_data: dict):
 					pdf.set_bg()
 					pdf.page_header_bar("5. Virtual Portfolio Divergence (continued)")
 
-	# ── Cumulative history ────────────────────────────────────────
-	history = divergence_data.get("history") or []
-	if history:
+	# ── Cumulative divergence ─────────────────────────────────────
+	cumulative_divergence = divergence_data.get("cumulative_divergence") or {}
+	if cumulative_divergence:
 		pdf.ln(6)
-		pdf.h2("Cumulative Divergence History (last 20 entries)")
+		pdf.h2("Cumulative Divergence by Strategy")
 
 		cols = [
-			("Date",        30),
-			("Strategy",    50),
-			("VP Value",    32),
-			("RP Value",    32),
-			("Divergence",  36),
+			("Strategy",         80),
+			("Total Divergence", 50),
 		]
 		pdf.table_header(cols)
 
-		for row in history[:20]:
-			d, strat, vp, rp = row[0], row[1], row[2], row[3]
-			if vp is None or rp is None:
-				continue
-			divergence = vp - rp
-
+		for strat, total_div in sorted(cumulative_divergence.items()):
 			pdf.set_font("Helvetica", "", FS_TINY)
+			div_color = C_GREEN if total_div > 0 else C_RED
 			pdf.set_text_color(*C_WHITE)
-			pdf.cell(30, 5, _safe(str(d)),    border=1)
-			pdf.cell(50, 5,
-						_safe(str(strat).replace("_", " ").title()),
-						border=1)
-			pdf.cell(32, 5, f"${vp:,.2f}",  border=1, align="R")
-			pdf.cell(32, 5, f"${rp:,.2f}",  border=1, align="R")
-
-			div_color = C_GREEN if divergence > 0 else C_RED
+			pdf.cell(80, 5, _safe(str(strat).replace("_", " ").title()), border=1)
 			pdf.set_text_color(*div_color)
-			pdf.cell(36, 5,
-						f"${divergence:+,.2f}", border=1, align="R")
+			pdf.cell(50, 5, f"${total_div:+,.2f}", border=1, align="R")
 			pdf.set_text_color(*C_WHITE)
 			pdf.ln()
 

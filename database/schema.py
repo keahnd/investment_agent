@@ -94,6 +94,7 @@ def init_database(user_path):
 					quantity        REAL,
 					market_value    REAL,
 					total_value     REAL,
+					divergence      REAL,
 					PRIMARY KEY (date, ticker, strategy)
 				)""")
 	
@@ -210,7 +211,7 @@ def insert_recommendation(conn, date, ticker, strategy, current_w,
 	""", (date, ticker, strategy, current_w, recommended_w, action, mu, sigma))
 	conn.commit()
 	
-def insert_virtual_portfolio(conn, date, positions):
+def insert_virtual_portfolio(conn, date, positions, rp_value=0.0):
 	"""
 	Write the virtual portfolio positions to the database.
 
@@ -218,16 +219,17 @@ def insert_virtual_portfolio(conn, date, positions):
 		conn: Connection to database
 		date: The date of the write
 		positions: dictionary of portfolio positions
+		rp_value: Real portfolio total value on this date (used to compute divergence)
 	"""
-	# Normalize to YYYY-MM-DD string so date equality queries work correctly.
 	if hasattr(date, "strftime"):
 		date = date.strftime("%Y-%m-%d")
 	for strategy, tickers in positions.items():
 		total_value = sum(p["market_value"] for p in tickers.values())
+		divergence = total_value - rp_value
 		for ticker, p in tickers.items():
 			conn.execute("""
 				INSERT OR REPLACE INTO virtual_portfolio
-					(date, ticker, strategy, weight, price, quantity, market_value, total_value)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""", (date, ticker, strategy, p["weight"], p["price"], p["shares"], p["market_value"], total_value))
+					(date, ticker, strategy, weight, price, quantity, market_value, total_value, divergence)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			""", (date, ticker, strategy, p["weight"], p["price"], p["shares"], p["market_value"], total_value, divergence))
 	conn.commit()

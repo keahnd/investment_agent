@@ -151,7 +151,7 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
 		missing_tickers = [t for t in all_tickers if t not in cached.columns]
 		if missing_tickers:
 			print(f"  [Cache] New tickers {missing_tickers} — downloading full history...")
-			new_cols = _download_translated(missing_tickers, start_date, last_cached)
+			new_cols = _download_translated(missing_tickers, start_date, last_cached  + timedelta(days=1))
 			cached = cached.join(new_cols, how='left')
 			still_null = [t for t in missing_tickers if t in cached.columns and cached[t].isna().all()]
 			if still_null:
@@ -165,7 +165,7 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
 		else:
 			gap_start = last_cached + timedelta(days=1)
 			print(f"  [Cache] Updating from {gap_start} to {today}...")
-			new_data = _download_translated(all_tickers, gap_start, today)
+			new_data = _download_translated(all_tickers, gap_start, today + timedelta(days=1))
 			if not new_data.empty:
 				data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna(how='all')
 				data.to_parquet(CACHE_FILE)
@@ -175,7 +175,7 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
 				data = cached
 	else:
 		print("  [Cache] No cache found. Downloading full history...")
-		data = _download_translated(all_tickers, start_date, today)
+		data = _download_translated(all_tickers, start_date, today + timedelta(days=1))
 		data.to_parquet(CACHE_FILE)
 		print(f"  [Cache] Prices saved to {CACHE_FILE}")
 
