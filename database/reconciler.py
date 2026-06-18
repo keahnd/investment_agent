@@ -155,7 +155,7 @@ def _build_virtual_portfolio(last_rec, opening_vp_value, opening_prices):
     return virtual_portfolio
 
 
-def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
+def _load_or_create_vp(conn, last_rec, opening_date, today, file):
     """
     Loads today's virtual portfolio from the DB if already written, otherwise
     builds it from last run's recommendations and opening prices, then writes it.
@@ -164,7 +164,6 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
         conn: Active database connection
         last_rec: List of (ticker, weight, strategy) tuples
         opening_date: datetime — date trades are executed at open
-        last_vp_date: Date string of the most recent VP snapshot in the DB
         today: Today's date string (YYYY-MM-DD)
         file: File object to write warnings to
 
@@ -198,7 +197,7 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
             virtual_portfolio.setdefault(strategy, {})[ticker] = {
                 "weight": weight, "shares": shares, "price": price, "market_value": market_value,
             }
-        return virtual_portfolio, False
+        return virtual_portfolio, False, actual_opening_date_str
 
     opening_vp_value = {}
     # seed each strategy with the real portfolio's total value
@@ -216,8 +215,8 @@ def _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file):
         if abs(computed - opening_vp_value[strategy]) > 0.01:
             print(f"  [WARN] {strategy} VP value mismatch: computed={computed:.2f}, expected={opening_vp_value[strategy]:.2f}", file=file)
 
-    insert_virtual_portfolio(conn, actual_opening_date, virtual_portfolio, rp_total)
-    return virtual_portfolio, True
+    insert_virtual_portfolio(conn, actual_opening_date, virtual_portfolio)
+    return virtual_portfolio, True, actual_opening_date_str
 
 
 def _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,
@@ -347,7 +346,7 @@ def reconcile_virtual_portfolio(conn, today, file=None):
                                        (last_vp_date,)).fetchall()) if last_vp_date else {}
     last_rp_value = conn.execute("SELECT SUM(market_value) FROM portfolios WHERE date = ?", (last_rec_date,)).fetchone()[0] or 0.0
 
-    virtual_portfolio, freshly_created = _load_or_create_vp(conn, last_rec, opening_date, last_vp_date, today, file)
+    virtual_portfolio, freshly_created, actual_opening_date_str = _load_or_create_vp(conn, last_rec, opening_date, today, file)
     if freshly_created:
         last_vp_values = {}
 
@@ -358,6 +357,13 @@ def reconcile_virtual_portfolio(conn, today, file=None):
                if t in raw_prices.columns and pos["shares"] is not None and pos["shares"] != 0)
         for s, positions in virtual_portfolio.items()
     }
+    for strategy, vp_val in curr_vp_values.items():
+        conn.execute(
+            "UPDATE virtual_portfolio SET divergence = ? WHERE date = ? AND strategy = ?",
+            (vp_val - curr_rp_value, actual_opening_date_str, strategy)
+        )
+    conn.commit()
+
     real_weights = dict(conn.execute("SELECT ticker, weight FROM portfolios WHERE date = ?", (today,)).fetchall())
 
     _print_divergence_summary(virtual_portfolio, curr_vp_values, last_vp_values,

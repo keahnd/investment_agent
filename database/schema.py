@@ -211,7 +211,7 @@ def insert_recommendation(conn, date, ticker, strategy, current_w,
 	""", (date, ticker, strategy, current_w, recommended_w, action, mu, sigma))
 	conn.commit()
 	
-def insert_virtual_portfolio(conn, date, positions, rp_value=0.0):
+def insert_virtual_portfolio(conn, date, positions):
 	"""
 	Write the virtual portfolio positions to the database.
 
@@ -225,11 +225,11 @@ def insert_virtual_portfolio(conn, date, positions, rp_value=0.0):
 		date = date.strftime("%Y-%m-%d")
 	for strategy, tickers in positions.items():
 		total_value = sum(p["market_value"] for p in tickers.values())
-		divergence = total_value - rp_value
 		for ticker, p in tickers.items():
 			conn.execute("""
 				INSERT OR REPLACE INTO virtual_portfolio
 					(date, ticker, strategy, weight, price, quantity, market_value, total_value, divergence)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			""", (date, ticker, strategy, p["weight"], p["price"], p["shares"], p["market_value"], total_value, divergence))
+			""", (date, ticker, strategy, p["weight"], p["price"], p["shares"], p["market_value"], total_value, 0))
+			# Insert divergence as 0 for now, later when divergence is calculted we will update the table.
 	conn.commit()
