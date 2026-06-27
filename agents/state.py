@@ -32,7 +32,7 @@ class PipelineState(TypedDict):
     factor_results:    Optional[dict]  # {ticker: {alpha, b_mkt, b_smb, b_hml, r2, r2_adj, p_vals}}
     garch_results:     Optional[dict]  # {ticker: {omega, alpha, beta, persist, long_run_vol, sigma_current}}
     mu_sigma:          Optional[dict]  # {ticker: {mu_annual, sigma_annual}}
-    valuation:         Optional[dict]  # {ticker: {fwd_pe, ttm_pe, peg, ev_ebitda}}
+    valuation:         Optional[dict]  # {ticker: {fwd_pe, ttm_pe, peg, ev_ebitda, ....}}
     financial_health:  Optional[dict]  # {ticker: {revenue_growth, fcf_margin, roic, ...}}
     earnings_data:     Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
     earnings_dates:    Optional[dict]  # {ticker: next_earnings_date}

@@ -551,8 +551,6 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			("Beta MKT",         fr.get("b_MKT"),        "{:.3f}"),
 			("Beta SMB",         fr.get("b_SMB"),        "{:.3f}"),
 			("Beta HML",         fr.get("b_HML"),        "{:.3f}"),
-			("R²",               fr.get("r2"),           "{:.3f}"),
-			("p-val alpha",      fr.get("p_val_alpha"),  "{:.3f}"),
 			("Mu (annual)",      ms.get("mu_annual"),    "{:.2%}"),
 		]
 
@@ -614,20 +612,32 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			text = fmt.format(val_f) if val_f is not None else "N/A"
 			pdf.cell(40, 5, _safe(text), ln=True)
 
-		# Full reasoning
-		reasoning = bl_views.get("reasoning", "")
-		if reasoning:
-			pdf.set_font("Helvetica", "B", FS_SMALL)
-			pdf.set_text_color(*C_CYAN)
-			pdf.cell(0, 5, "Reasoning", ln=True)
+		# Earnings summary
+		pdf.set_x(left_x)
+		pdf.set_font("Helvetica", "B", FS_SMALL)
+		pdf.set_text_color(*C_CYAN)
+		pdf.cell(85, 5, "Earnings", ln=True)
+
+		next_e   = ed.get("next_earnings_date", "N/A")
+		avg_surp = ed.get("avg_eps_surprise_pct")
+		consec   = ed.get("consecutive_beats", 0)
+
+		earnings_items = [
+			("Next Earnings",      next_e,   "{}"),
+			("Avg EPS Surprise",   avg_surp, "{:.1f}%"),
+			("Consecutive Beats",  consec,   "{:.0f}"),
+		]
+
+		for label, val_e, fmt in earnings_items:
+			pdf.set_x(left_x)
 			pdf.set_font("Helvetica", "", FS_SMALL)
+			pdf.set_text_color(*C_GREY)
+			pdf.cell(45, 5, label)
 			pdf.set_text_color(*C_WHITE)
-			pdf.multi_cell(0, 5, _safe(reasoning))
-			pdf.ln(2)
+			text = fmt.format(val_e) if val_e is not None else "N/A"
+			pdf.cell(40, 5, _safe(text), ln=True)
 
-		end_y = pdf.get_y()
-
-		# Right column — financial health and earnings
+		# Right column — financial health and Valuation
 		right_y = start_y
 		pdf.set_xy(right_x, right_y)
 		pdf.set_font("Helvetica", "B", FS_SMALL)
@@ -654,31 +664,6 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			pdf.set_text_color(*C_WHITE)
 			text = fmt.format(val_h) if val_h is not None else "N/A"
 			pdf.cell(35, 5, _safe(text), ln=True)
-
-		# Earnings summary
-		pdf.set_x(right_x)
-		pdf.set_font("Helvetica", "B", FS_SMALL)
-		pdf.set_text_color(*C_CYAN)
-		pdf.cell(85, 5, "Earnings", ln=True)
-
-		next_e   = ed.get("next_earnings_date", "N/A")
-		avg_surp = ed.get("avg_eps_surprise_pct")
-		consec   = ed.get("consecutive_beats", 0)
-
-		earnings_items = [
-			("Next Earnings",      next_e,   "{}"),
-			("Avg EPS Surprise",   avg_surp, "{:.1f}%"),
-			("Consecutive Beats",  consec,   "{:.0f}"),
-		]
-
-		for label, val_e, fmt in earnings_items:
-			pdf.set_x(right_x)
-			pdf.set_font("Helvetica", "", FS_SMALL)
-			pdf.set_text_color(*C_GREY)
-			pdf.cell(50, 5, label)
-			pdf.set_text_color(*C_WHITE)
-			text = fmt.format(val_e) if val_e is not None else "N/A"
-			pdf.cell(35, 5, _safe(text), ln=True)
    
 		# Valuation summary
 		pdf.set_x(right_x)
@@ -687,13 +672,18 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		pdf.cell(85, 5, "Valuation", ln=True)
 
 		valuation_items = [
-			("PEG",   			val.get("peg", 0), 				"{:.2f}"),
-			("Fwd PE",  		val.get("fwd_pe", 0),   		"{:.1f}x"),
-   			("Ttm PE",  		val.get("ttm_pe", 0),   		"{:.1f}x"),
-			("EV EBITDA",  		val.get("ev_ebitda", 0),   		"{:.1f}x"),
-			("Target Price",	val.get("target_price", 0),   	"{:.2f}"),
-			("Earnings Growth",	val.get("earnings_growth", 0),	"{:.2%}"),
-			("Revenue Growth",	val.get("revenue_growth", 0),   "{:.2%}"),
+			("PEG",   						val.get("peg", 0), 					"{:.2f}"),
+			("PEG Hist. Ratio",				val.get("peg_hist_ratio", 0), 		"{:.2f}"),
+			("PEG Sector Ratio",			val.get("peg_sector_ratio", 0),		"{:.2f}"),
+			("Fwd PE",  					val.get("fwd_pe", 0),   			"{:.1f}x"),
+   			("Ttm PE",  					val.get("ttm_pe", 0),   			"{:.1f}x"),
+			("Historical PE Percentile",	val.get("pe_vs_history_pctile", 0),	"{:.2f}th pct"),
+			("Peer PE Premium",				val.get("pe_vs_sector_ratio", 0), 	"{:.2f}"),
+			("EV EBITDA",  					val.get("ev_ebitda", 0),   			"{:.1f}x"),
+			("EV/EBITDA Sector Ratio",		val.get("ev_sector_ratio", 0),   	"{:.2f}"),
+			("Target Price",				val.get("target_price", 0),   		"{:.2f}"),
+			("Earnings Growth",				val.get("earnings_growth", 0),		"{:.2%}"),
+			("Revenue Growth",				val.get("revenue_growth", 0),   	"{:.2%}"),
 		]
 
 		for label, val_e, fmt in valuation_items:
@@ -704,6 +694,21 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			pdf.set_text_color(*C_WHITE)
 			text = fmt.format(val_e) if val_e is not None else "N/A"
 			pdf.cell(35, 5, _safe(text), ln=True)
+		end_y = pdf.get_y()
+
+		# Full reasoning
+		pdf.set_xy(left_x, end_y)
+		reasoning = bl_views.get("reasoning", "")
+		if reasoning:
+			pdf.set_font("Helvetica", "B", FS_SMALL)
+			pdf.set_text_color(*C_CYAN)
+			pdf.cell(0, 5, "Reasoning", ln=True)
+			pdf.set_font("Helvetica", "", FS_SMALL)
+			pdf.set_text_color(*C_WHITE)
+			pdf.multi_cell(0, 5, _safe(reasoning))
+			pdf.ln(2)
+
+		end_y = pdf.get_y()
    
 		# ── Per-ticker charts ─────────────────────────────────────────
 		pdf.set_xy(left_x, end_y)
@@ -745,6 +750,74 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		new_y = max(pdf.get_y(), start_y + len(factor_items) * 5 + len(garch_items) * 5 + 20)
 		pdf.set_y(new_y + 4)
 		pdf.divider()
+
+
+# def format_pe_comparison_table(
+# 	ticker:     str,
+# 	fwd_pe:     float,
+# 	ttm_pe:		float,
+# 	hist_pe:    dict,
+# 	sector_pe:  SectorPEResult,
+# 	peg:        float,
+# ) -> str:
+# 	"""
+# 	Returns a formatted text table for the PDF/email report showing:
+
+# 	PE Comparison for MSFT
+# 	──────────────────────────────────────────────────────────────────
+# 	Metric                   Value       Benchmark         vs Benchmark
+# 	Current forward PE       19.0x       —                 —
+# 	Own 5yr median PE        28.5x       own history       33% discount
+# 	Own 5yr 10th pct PE      20.1x       floor             near floor
+# 	Sector peer median PE    25.8x       Tech sector now   26% discount
+# 	Sector ETF PE            26.2x       XLK               27% discount
+# 	Sector long-run avg PE   28.5x       Damodaran Tech    33% discount
+# 	PEG ratio                1.17        < 1.5 = fair      attractive
+# 	──────────────────────────────────────────────────────────────────
+# 	"""
+# 	rows = []
+
+# 	def pct_diff(value, benchmark):
+# 		if benchmark and benchmark > 0:
+# 			d = (value / benchmark - 1) * 100
+# 			return f"{d:+.0f}%"
+# 		return "—"
+
+# 	rows.append(("Current forward PE",      f"{fwd_pe:.1f}x",     "—",                    "—"))
+# 	rows.append(("Current trailing PE",     f"{ttm_pe:.1f}x",     "—",                    "—"))
+
+# 	if hist_pe.get("median"):
+# 		rows.append(("Own 5yr median PE",   f"{hist_pe['median']:.1f}x", "own history",    pct_diff(fwd_pe, hist_pe["median"])))
+# 	if hist_pe.get("p10"):
+# 		rows.append(("Own 5yr 10th pct PE", f"{hist_pe['p10']:.1f}x",   "historic floor", pct_diff(fwd_pe, hist_pe["p10"])))
+
+# 	if sector_pe.peer_median_pe:
+# 		rows.append(("Sector peer median",  f"{sector_pe.peer_median_pe:.1f}x", f"{sector_pe.sector} peers", pct_diff(fwd_pe, sector_pe.peer_median_pe)))
+# 	if sector_pe.etf_pe:
+# 		etf = SECTOR_ETF_MAP.get(sector_pe.sector, "ETF")
+# 		rows.append(("Sector ETF PE",       f"{sector_pe.etf_pe:.1f}x",  etf,              pct_diff(fwd_pe, sector_pe.etf_pe)))
+# 	if sector_pe.damodaran_pe:
+# 		rows.append(("Sector long-run avg", f"{sector_pe.damodaran_pe:.1f}x", "Damodaran",  pct_diff(fwd_pe, sector_pe.damodaran_pe)))
+
+# 	if peg:
+# 		peg_note = "attractive" if peg < 1.5 else "elevated" if peg > 2.5 else "fair"
+# 		rows.append(("PEG ratio",           f"{peg:.2f}",           "< 1.5 = fair",        peg_note))
+
+# 	# Format as aligned text table
+# 	col_widths = [28, 10, 22, 16]
+# 	header = (
+# 		f"{'Metric':<{col_widths[0]}} {'Value':>{col_widths[1]}}  "
+# 		f"{'Benchmark':<{col_widths[2]}} {'vs Benchmark':>{col_widths[3]}}"
+# 	)
+# 	sep = "─" * (sum(col_widths) + 6)
+# 	lines = [f"\nPE Comparison — {ticker}", sep, header, sep]
+# 	for m, v, b, d in rows:
+# 		lines.append(
+# 			f"{m:<{col_widths[0]}} {v:>{col_widths[1]}}  "
+# 			f"{b:<{col_widths[2]}} {d:>{col_widths[3]}}"
+# 		)
+# 	lines.append(sep)
+# 	return "\n".join(lines)
 
 
 def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: dict):
@@ -978,7 +1051,7 @@ def generate_report(final_state: dict, report_dir, charts_dir=None, divergence_d
     _section_model_outputs(pdf, final_state, charts_dir)
     print(f"    [ok] Model outputs")
 
-    pdf_path = report_dir / f"report_{final_state["user_name"]}_{run_date}.pdf"
+    pdf_path = report_dir / f"report_{final_state['user_name']}_{run_date}.pdf"
     pdf.output(str(pdf_path))
     print(f"  [Report] Saved to {pdf_path}")
 

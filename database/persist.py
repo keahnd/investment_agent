@@ -242,3 +242,17 @@ def _write_simulations(state, conn, date):
                 sim.get("pct")[5],  sim.get("VaR_95"), sim.get("CVaR_95"),
                 sim.get("prob_up"), sim.get("E_ST")
             ))
+            
+def _save_cache(self, sector: str, result: "SectorPEResult"):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO sector_pe_cache
+                    (sector, etf_pe, peer_median_pe, damodaran_pe, fetched_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                sector,
+                result.etf_pe,
+                result.peer_median_pe,
+                result.damodaran_pe,
+                result.fetched_at,
+            ))

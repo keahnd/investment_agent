@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 
 from agents.state import PipelineState
 from agents.llm import get_llm
+from valuation_eval.valuation import compute_valuation_signal
 
 # Constants
 R2_LOW_THRESHOLD       = 0.15
@@ -1081,15 +1082,14 @@ def agent2_quant(state: PipelineState) -> dict:
 			financial_health[ticker] = {}
 			
 		try:
-			valuation[ticker] = fetch_valuation_metrics(ticker)
+			valuation_metrics = fetch_valuation_metrics(ticker)
+			val_signal = compute_valuation_signal(ticker, state["user_path"], valuation_metrics)
+			valuation[ticker] = {**valuation_metrics, **val_signal}
 		except Exception as e:
 			errors.append(f"{ticker}: Valuation fetch failed: {e}")
 			valuation[ticker] = {}
 			
 		try:
-			# if ticker_info.get(ticker, {}).get("type") == "etf":
-			#     earnings_data[ticker] = {"next_earnings_date": None, "recent_quarters": [], ...}
-			# else:
 			earnings = fetch_earnings_data(ticker)
 			earnings_data[ticker] = earnings
 			earnings_dates[ticker] = earnings.get("next_earnings_date")

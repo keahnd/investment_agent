@@ -239,7 +239,6 @@ def main():
         try:
             run_user(user_path)
         except Exception as e:
-            import traceback
             print(f"\n  [ERROR] Pipeline failed for {user_path.name}: {e}")
             traceback.print_exc()
 

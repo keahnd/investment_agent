@@ -126,6 +126,16 @@ def init_database(user_path):
 			expected_value  REAL,
 			PRIMARY KEY (date, strategy)
 		)""")
+	
+	cursor.execute("""
+		CREATE TABLE IF NOT EXISTS sector_pe_cache (
+			sector     TEXT PRIMARY KEY,
+			fwd_pe     TEXT,
+			ttm_pe     TEXT,
+			ev_ebitda  TEXT,
+			peg        TEXT,
+			fetched_at TEXT
+		)""")
 
 	con.commit()
 	return con
@@ -202,7 +212,6 @@ def insert_recommendation(conn, date, ticker, strategy, current_w,
 		mu: Annualised expected return
 		sigma: Annualised volatility
 	"""
-	# OR REPLACE IS FOR TESTING
 	conn.execute("""
 		INSERT OR REPLACE INTO recommendations
 			(date, ticker, strategy, current_weight, recommended_weight,
