@@ -19,11 +19,13 @@ from unittest.mock import patch, MagicMock
 
 import pandas as pd
 import numpy as np
+import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.schema import init_database
 from valuation_eval.valuation import (
+	_fetch_historical_values,
 	_fetch_historical_pe_range,
 	_fetch_historical_peg_range,
 	_peg_signal,
@@ -33,6 +35,7 @@ from valuation_eval.valuation import (
 	_save_sector_pe_cache,
 	fetch_sector_metrics_from_peers,
 	compute_valuation_signal,
+	_YF_SECTOR_MAP,
 )
 
 
@@ -448,7 +451,7 @@ def test_compute_valuation_signal_returns_expected_keys(_, mock_ticker_cls):
 
 	expected_keys = {
 		"valuation_signal", "signal_confidence",
-		"pe_vs_history_pctile", "pe_vs_sector_premium_pct",
+		"pe_vs_history_pctile", "pe_vs_sector_ratio",
 		"sector_pe_current", "signal_breakdown",
 	}
 	missing = expected_keys - set(result.keys())
@@ -482,7 +485,136 @@ def test_compute_valuation_signal_cheap(_, mock_ticker_cls):
 	print("[PASS] test_compute_valuation_signal_cheap")
 
 
+# ── Integration tests (real yfinance — requires network) ───────────────────
+
+def integration_test_fetch_historical_values_msft():
+	"""_fetch_historical_values makes a real API call and returns plausible data."""
+	hist_pe, hist_peg, sector = _fetch_historical_values("MSFT")
+
+	assert isinstance(hist_pe, dict), f"Expected dict for hist_pe, got {type(hist_pe)}"
+	assert isinstance(hist_peg, dict), f"Expected dict for hist_peg, got {type(hist_peg)}"
+	assert sector == "Technology", f"Expected sector='Technology', got {sector!r}"
+	assert hist_pe.get("median") is not None, "Expected non-None hist_pe median for MSFT"
+	assert 5 < hist_pe["median"] < 150, \
+		f"Expected hist_pe median in (5, 150), got {hist_pe['median']:.1f}"
+	print("[PASS] integration_test_fetch_historical_values_msft")
+
+
+def integration_test_income_stmt_sort_ascending():
+	"""income_stmt columns come newest-first from yfinance; after sort_index they must be oldest-first."""
+	tk = yf.Ticker("MSFT")
+	income = tk.income_stmt
+
+	eps_row = None
+	for label in ["Basic EPS", "Diluted EPS"]:
+		if label in income.index:
+			eps_row = income.loc[label]
+			break
+
+	assert eps_row is not None, "Expected 'Basic EPS' or 'Diluted EPS' row in MSFT income_stmt"
+
+	eps_clean = eps_row.dropna()
+	assert len(eps_clean) >= 3, f"Expected >= 3 years of EPS data, got {len(eps_clean)}"
+
+	raw_years = list(eps_clean.index.year)
+	assert raw_years == sorted(raw_years, reverse=True), \
+		f"Expected raw income_stmt to be newest-first (descending), got {raw_years}"
+
+	eps_by_year = eps_clean.copy()
+	eps_by_year.index = eps_by_year.index.year
+	earnings = eps_by_year.sort_index(ascending=True)
+	result_years = list(earnings.index)
+	assert result_years == sorted(result_years), \
+		f"After sort_index(ascending=True), years not ascending: {result_years}"
+	print("[PASS] integration_test_income_stmt_sort_ascending")
+
+
+def integration_test_peg_range_not_null_msft():
+	"""hist_peg median should be non-None for MSFT — validates ascending-sort fix."""
+	_, hist_peg, _ = _fetch_historical_values("MSFT")
+
+	assert hist_peg.get("median") is not None, \
+		"hist_peg median is None for MSFT — ascending sort fix may have regressed"
+	assert hist_peg.get("n", 0) >= 2, \
+		f"Expected >= 2 valid PEG data points for MSFT, got {hist_peg.get('n')}"
+	print("[PASS] integration_test_peg_range_not_null_msft")
+
+
+def integration_test_sector_normalization_jpm():
+	"""JPM reports 'Financial Services' in yfinance; map must convert to 'Financials'."""
+	_, _, raw_sector = _fetch_historical_values("JPM")
+
+	assert raw_sector == "Financial Services", \
+		f"Expected raw sector 'Financial Services' from yfinance for JPM, got {raw_sector!r}"
+	normalized = _YF_SECTOR_MAP.get(raw_sector, raw_sector)
+	assert normalized == "Financials", \
+		f"Expected normalized sector 'Financials', got {normalized!r}"
+	print("[PASS] integration_test_sector_normalization_jpm")
+
+
+def integration_test_compute_valuation_signal_msft():
+	"""Full pipeline end-to-end: real yfinance data + temp DB + pre-seeded sector cache."""
+	_, db_path = make_db()
+
+	_save_sector_pe_cache("Technology", {
+		"fwd_pe":    {"median": 28.0, "p25": 22.0, "p75": 36.0, "n": 15},
+		"ttm_pe":    {"median": 30.0, "p25": 24.0, "p75": 38.0, "n": 15},
+		"ev_ebitda": {"median": 20.0, "p25": 16.0, "p75": 25.0, "n": 12},
+		"peg":       {"median": 2.0,  "p25": 1.4,  "p75": 2.8,  "n": 13},
+	}, str(db_path))
+
+	metrics = {"fwd_pe": 30.0, "ttm_pe": 32.0, "peg": 2.0, "ev_ebitda": 22.0}
+	result  = compute_valuation_signal("MSFT", db_path.parent, metrics)
+
+	assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+	expected_keys = {
+		"valuation_signal", "signal_confidence",
+		"pe_vs_history_pctile", "pe_vs_sector_ratio",
+		"sector_pe_current", "signal_breakdown",
+	}
+	missing = expected_keys - set(result.keys())
+	assert not missing, f"Missing keys in result: {missing}"
+	assert result["valuation_signal"] in {"cheap", "fair", "expensive"}, \
+		f"Unexpected valuation_signal value: {result['valuation_signal']!r}"
+	print("[PASS] integration_test_compute_valuation_signal_msft")
+
+
+def integration_test_none_handling_speculative():
+	"""Speculative ticker with no metrics dict → returns dict without raising."""
+	_, db_path = make_db()
+
+	result = compute_valuation_signal("LUNR", db_path.parent, {})
+
+	assert isinstance(result, dict), f"Expected dict for speculative ticker, got {type(result)}"
+	print("[PASS] integration_test_none_handling_speculative")
+
+
 # ── Runner ─────────────────────────────────────────────────────────────────
+
+def run_integration():
+	print("\n-- Integration tests (live network) --")
+	tests = [
+		integration_test_fetch_historical_values_msft,
+		integration_test_income_stmt_sort_ascending,
+		integration_test_peg_range_not_null_msft,
+		integration_test_sector_normalization_jpm,
+		integration_test_compute_valuation_signal_msft,
+		integration_test_none_handling_speculative,
+	]
+
+	passed = 0
+	failed = 0
+	for fn in tests:
+		try:
+			fn()
+			passed += 1
+		except Exception:
+			failed += 1
+			print(f"[FAIL] {fn.__name__}")
+			traceback.print_exc()
+
+	print(f"\n{passed} passed, {failed} failed (integration)")
+
 
 def run_all():
 	tests = [
@@ -522,6 +654,7 @@ def run_all():
 			traceback.print_exc()
 
 	print(f"\n{passed} passed, {failed} failed")
+	run_integration()
 
 
 if __name__ == "__main__":

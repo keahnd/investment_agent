@@ -649,7 +649,12 @@ Important context to apply:
   - if Fear&Greed is at 80 (extreme greed) and AAII is bearish, the macro context should pull 
     individual views down even when company-specific news is positive
   - Focus on valuations and quality of business (growth prospects and earnings/revenue).
-  - If sentiment is negative but valuation signal is neutral or cheap, explain the divergence — do not restate valuation as expensive.
+  - If sentiment is negative but valuation signal is neutral or cheap, explain the divergence, 
+    do not restate valuation as expensive.
+  - If there is an upcoming earnings call, indicate some uncertainty but use the avg EPS surprise
+    and consecutive beats to estimate if it will be positive. Don't let uncertainty contribute to a
+    negative or positive outlook. Uncertainty should be treated as uncertainty, but use the EPS surprise
+    as a guideline or estimate.
     
 Calibration guide for view_return:
   Strongly positive sentiment + cheap valuation  → +0.04 to +0.06
