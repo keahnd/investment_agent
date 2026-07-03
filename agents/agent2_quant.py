@@ -185,10 +185,56 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
 
 	return data
 
+def get_first_row(lines: list[str]) -> int:
+	"""
+	Finds the row index of the column header line in a Ken French CSV.
+
+	Ken French CSVs begin with a plain-text description block of variable length
+	before the actual data. This scans for the first line whose first token is an
+	8-digit integer (a date in YYYYMMDD format), then returns the index one above
+	it — the column header row that pandas needs for skiprows.
+	"""
+	for i, line in enumerate(lines):
+		first_token = line.strip().split(',')[0].strip()
+		if first_token.isdigit() and len(first_token) == 8:
+			data_start = i
+			break
+	# The line above data_start is the column headers
+	return data_start - 1
+
+def get_factor_table(url: str) -> pd.DataFrame:
+	"""
+	Downloads and parses a Ken French factor CSV from a zip URL.
+
+	Handles the variable-length description header in all Ken French files by
+	using get_first_row to locate the column header line dynamically. Strips
+	trailing whitespace from column names, converts the YYYYMMDD integer index
+	to datetime, and drops footer rows (copyright text) by removing non-numeric
+	index values. Returns factors as decimals (not percent).
+	"""
+	response = requests.get(url, timeout=30)
+	response.raise_for_status()
+
+	with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+		csv_name = [n for n in z.namelist() if n.endswith('.csv')][0]
+		with z.open(csv_name) as f:
+			# Skip the header description rows until we hit the data
+			lines = f.read().decode('utf-8', errors='ignore').splitlines()
+			# Find the first line where the first token is an 8-digit date
+			header_row = get_first_row(lines)
+			raw = pd.read_csv(io.StringIO('\n'.join(lines)), skiprows=header_row, index_col=0)
+	
+	# Drop the footer rows (non-date index values)
+	raw = raw[pd.to_numeric(raw.index, errors='coerce').notna()]
+	raw.index = pd.to_datetime(raw.index, format='%Y%m%d')
+	raw.columns = raw.columns.str.strip()
+
+	return raw
+
 
 def fetch_ff_factors(today: date, start: date, force_refresh: bool = False) -> pd.DataFrame:
 	"""
-	Downloads the Fama-French 3-factor daily data from Ken French's data library.
+	Downloads the Fama-French 6-factor daily data from Ken French's data library.
 
 	Fetches the F-F_Research_Data_Factors_daily_CSV.zip, parses it, and converts
 	from percent to decimal. Results are cached to FF_CACHE_FILE and refreshed
@@ -213,26 +259,17 @@ def fetch_ff_factors(today: date, start: date, force_refresh: bool = False) -> p
 		logger.info(f"FF Cache: Stale ({last_cached}). Re-downloading...")
 
 	logger.info("FF Cache: Downloading Fama-French daily factors...")
-	url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_daily_CSV.zip"
-	response = requests.get(url, timeout=30)
-	response.raise_for_status()
+	
+	factors = get_factor_table("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_daily_CSV.zip")
+	mom = get_factor_table("https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_daily_CSV.zip")
 
-	with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-		csv_name = [n for n in z.namelist() if n.endswith('.csv')][0]
-		with z.open(csv_name) as f:
-			# Skip the header description rows until we hit the data
-			raw = pd.read_csv(f, skiprows=3, index_col=0)
-
-	# Drop the footer rows (non-date index values)
-	raw = raw[pd.to_numeric(raw.index, errors='coerce').notna()]
-	raw.index = pd.to_datetime(raw.index, format='%Y%m%d')
-	raw.columns = raw.columns.str.strip()
-
-	factors = raw / 100  # convert percent → decimal
-	factors = factors.loc[start:today]
-	factors.to_parquet(FF_CACHE_FILE)
+	factors = factors / 100  # convert percent → decimal
+	mom = mom.rename(columns={"Mom": "MOM"}) / 100 
+	combined = factors.join(mom[["MOM"]], how="inner")
+	combined = combined.loc[start:today]
+	combined.to_parquet(FF_CACHE_FILE)
 	logger.debug(f"FF Cache: Saved to {FF_CACHE_FILE}")
-	return factors
+	return combined
 
 
 def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff_factors: pd.DataFrame, file: io.IOBase | None = None) -> dict:
@@ -251,7 +288,7 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 		file: Optional file object to redirect printed diagnostics. Defaults to stdout.
 
 	Returns:
-		Dict with keys: log_ret, log_ret_series, excess_ret, MKT, SMB, HML,
+		Dict with keys: log_ret, log_ret_series, excess_ret, MKT, SMB, HML, RMA, CMA, MOM
 		factor_vols, prices, S0, T_hist, rf_daily, rf_ann.
 	"""
 	price_series = raw[ticker].dropna()
@@ -265,6 +302,9 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 	MKT = ff.loc[common_idx, 'Mkt-RF'].values
 	SMB = ff.loc[common_idx, 'SMB'].values
 	HML = ff.loc[common_idx, 'HML'].values
+	RMW = ff.loc[common_idx, 'RMW'].values
+	CMA = ff.loc[common_idx, 'CMA'].values
+	MOM = ff.loc[common_idx, 'MOM'].values
 	rf_daily_series = ff.loc[common_idx, 'RF'].values
 
 	rf_daily = rf_daily_series.mean()
@@ -273,7 +313,7 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 
 	S0 = float(price_series.iloc[0])
 	T_hist = len(log_ret)
-	factor_vols = np.array([MKT.std(), SMB.std(), HML.std()])
+	factor_vols = np.array([MKT.std(), SMB.std(), HML.std(), RMW.std(), CMA.std(), MOM.std()])
 
 	print(f"\n[Returns — {ticker}]", file=file)
 	print(f"  Annualised mean return : {log_ret.mean() * 252:.2%}", file=file)
@@ -291,6 +331,9 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 		"MKT": MKT,
 		"SMB": SMB,
 		"HML": HML,
+		"RMW": RMW,
+		"CMA": CMA,
+		"MOM": MOM,
 		"factor_vols": factor_vols,
 		"prices": price_series.values,
 		"S0": S0,
@@ -300,7 +343,44 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 	}
 
 
-def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, HML: np.ndarray, rf_ann: float, cape: float, real_rf: float, file: io.IOBase | None = None) -> dict:
+def get_forward_mu_factors(
+		factor_means: np.ndarray,
+		cape: float,
+		rf_10: float,
+		file: io.IOBase | None = None
+	) -> dict:
+	"""
+	Finds/Calculates the forward factor
+	
+	"""
+	historical_erp = factor_means[0]
+	cape_weight = 0.6           # TUNABLE PARAM
+	cape_erp = max(0.0, (1 / cape) - rf_10)
+	blended_erp = cape_weight * cape_erp + (1 - cape_weight) * historical_erp
+
+	print(f"\n10-year Real risk-free (TIPS): {rf_10:.2%}", file=file)
+	print(f"  CAPE earnings yield (1/CAPE) : {1/cape:.2%}", file=file)
+	print(f"  CAPE ERP                     : {cape_erp:.2%}", file=file)
+	print(f"  Historical ERP (5yr MKT avg) : {historical_erp:.2%}", file=file)
+	print(f"  Blended ERP (w={cape_weight:.0%} CAPE)   : {blended_erp:.2%}", file=file)
+
+	return {
+		"mkt": blended_erp,
+	}
+
+
+def run_factor_models(
+		excess_ret: np.ndarray, 
+		MKT: np.ndarray, 
+		SMB: np.ndarray, 
+		HML: np.ndarray, 
+		RMA: np.ndarray,
+		CMA: np.ndarray,
+		MOM: np.ndarray,
+		rf_ann: float, 
+		cape: float, 
+		real_rf: tuple[float, float], 
+		file: io.IOBase | None = None) -> dict:
 	"""
 	Fits a Fama-French 3-factor OLS regression on daily excess returns.
 
@@ -313,6 +393,9 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
 		MKT: Daily Mkt-RF factor array.
 		SMB: Daily SMB factor array.
 		HML: Daily HML factor array.
+		RMA: Daily RMA factor array.
+		CMA: Daily CMA factor array.
+		MOM: Daily MOM factor array.
 		rf_ann: Annualised risk-free rate (mean of daily RF * 252).
 		cape: Current Shiller CAPE ratio, used to compute the CAPE-based ERP.
 		real_rf: 10-year TIPS real yield used as the real risk-free rate in the
@@ -324,7 +407,7 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
 		residuals, r2, r2_adj, Y_hat, p_val_alpha, rf_ann.
 	"""
 	T_hist = len(excess_ret)
-	X = np.column_stack([np.ones(T_hist), MKT, SMB, HML])
+	X = np.column_stack([np.ones(T_hist), MKT, SMB, HML, RMA, CMA, MOM])
 	Y = excess_ret
 
 	XtX_inv = np.linalg.inv(X.T @ X)
@@ -343,7 +426,7 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
 	R2 = 1 - SS_res / SS_tot
 	R2_adj = 1 - (1 - R2) * (n - 1) / (n - k)
 
-	labels = ["Alpha (daily)", "Beta_MKT", "Beta_SMB", "Beta_HML"]
+	labels = ["Alpha (daily)", "Beta_MKT", "Beta_SMB", "Beta_HML", "Beta_RMA", "Beta_CMA", "Beta_MOM"]
 	print("\n[Factor Model Regression]", file=file)
 	print(f"  {'Parameter':<18} {'Estimate':>10} {'Std Err':>10} {'t-stat':>8} {'p-value':>8}", file=file)
 	print("  " + "-" * 60, file=file)
@@ -354,32 +437,33 @@ def run_factor_models(excess_ret: np.ndarray, MKT: np.ndarray, SMB: np.ndarray, 
 	print(f"  Adj. R² = {R2_adj:.4f}", file=file)
 
 	alpha_daily = betas[0]
-	b_MKT, b_SMB, b_HML = betas[1], betas[2], betas[3]
+	b_MKT, b_SMB, b_HML, b_RMA, b_CMA, b_MOM = betas[1], betas[2], betas[3], betas[4], betas[5], betas[6]
 
 	factor_annual_means = np.array([
 		MKT.mean() * 252,
 		SMB.mean() * 252,
 		HML.mean() * 252,
+		RMA.mean() * 252, 
+		CMA.mean() * 252,
+		MOM.mean() * 252
 	])
-	
-	historical_erp = factor_annual_means[0]
-	cape_weight = 0.6           # TUNABLE PARAM
-	cape_erp = max(0.0, (1 / cape) - real_rf)
-	blended_erp = cape_weight * cape_erp + (1 - cape_weight) * historical_erp
+
+	rf_1, rf_10 = real_rf
+	if rf_1:
+		rf_ann = rf_1
+
+	forward_mu_factors = get_forward_mu_factors(factor_annual_means, rf_10, cape, file)
 
 	mu_annual = (
 		rf_ann
 		+ alpha_daily * 252
-		+ b_MKT * blended_erp
-		+ b_SMB * factor_annual_means[1]
-		+ b_HML * factor_annual_means[2]
+		+ b_MKT * forward_mu_factors["mkt"]
+		+ b_SMB * forward_mu_factors["smb"]
+		+ b_HML * forward_mu_factors["hml"]
+		+ b_RMA * forward_mu_factors["rma"],
+		+ b_CMA * forward_mu_factors["cma"],
+		+ b_MOM * forward_mu_factors["mom"],
 	)
-
-	print(f"\n  Real risk-free (TIPS)        : {real_rf:.2%}", file=file)
-	print(f"  CAPE earnings yield (1/CAPE) : {1/cape:.2%}", file=file)
-	print(f"  CAPE ERP                     : {cape_erp:.2%}", file=file)
-	print(f"  Historical ERP (5yr MKT avg) : {historical_erp:.2%}", file=file)
-	print(f"  Blended ERP (w={cape_weight:.0%} CAPE)   : {blended_erp:.2%}", file=file)
 	print(f"  Estimated annualised mu      : {mu_annual:.2%}", file=file)
 
 	return {
@@ -711,44 +795,43 @@ def fetch_cape() -> float:
 		return 25.0
 
 
-def fetch_real_rf() -> float:
+def fetch_real_rf() -> tuple[float, float]:
 	"""
-	Fetches the 10-year TIPS real yield from FRED (series DFII10).
+	Fetches two risk-free rate series from FRED.
 
-	The TIPS real yield is the market-implied real risk-free rate, derived from
-	the spread between 10-year nominal Treasuries and inflation-protected bonds.
-	Using it directly in the CAPE ERP formula eliminates the need to assume an
-	inflation rate. Requires the FRED_API_KEY environment variable.
+	  DGS1   — 1-year Treasury constant maturity yield (nominal, daily).
+	  DFII10 — 10-year TIPS real yield (inflation-adjusted, daily), used in
+	            the CAPE ERP formula so inflation does not need to be assumed separately.
 
 	Returns:
-		10-year TIPS real yield as a decimal (e.g. 0.02 for 2.0%).
-		Falls back to 0.02 (2%) if the key is missing or request fails.
+		(rf_1yr, rf_10yr) both as decimals. Falls back to (0.04, 0.02) if
+		FRED_API_KEY is missing or a fetch fails.
 	"""
 	api_key = os.getenv("FRED_API_KEY")
 	if not api_key:
-		logger.warning("Real RF: FRED_API_KEY not set. Using fallback of 2%")
-		return 0.02
+		logger.warning("Real RF: FRED_API_KEY not set. Using fallbacks (1yr=4%, 10yr real=2%)")
+		return None, 0.02
 
-	url = "https://api.stlouisfed.org/fred/series/observations"
-	params = {
-		"series_id":  "DFII10",
-		"api_key":    api_key,
-		"file_type":  "json",
-		"sort_order": "desc",
-		"limit":      5,        # grab a few to skip weekends/holidays with missing data
-	}
-	try:
-		response = requests.get(url, params=params, timeout=10)
-		response.raise_for_status()
-		for obs in response.json()["observations"]:
-			if obs["value"] != ".":
-				real_rf = float(obs["value"]) / 100
-				logger.debug(f"Real RF: TIPS 10yr real yield ({obs['date']}): {real_rf:.2%}")
-				return real_rf
-		raise ValueError("No valid DFII10 observations in response")
-	except Exception as e:
-		logger.warning(f"Real RF: FRED fetch failed ({e}). Using fallback of 2%")
-		return 0.02
+	base_url = "https://api.stlouisfed.org/fred/series/observations"
+	base_params = {"api_key": api_key, "file_type": "json", "sort_order": "desc", "limit": 5}
+
+	def _fetch(series_id: str, fallback: float) -> float:
+		try:
+			resp = requests.get(base_url, params={**base_params, "series_id": series_id}, timeout=10)
+			resp.raise_for_status()
+			for obs in resp.json()["observations"]:
+				if obs["value"] != ".":
+					val = float(obs["value"]) / 100
+					logger.debug(f"Real RF: {series_id} ({obs['date']}): {val:.2%}")
+					return val
+			raise ValueError(f"No valid {series_id} observations in response")
+		except Exception as e:
+			logger.warning(f"Real RF: {series_id} fetch failed ({e}). Using fallback {fallback:.0%}")
+			return fallback
+
+	rf_1yr  = _fetch("DGS1",   fallback=None)
+	rf_10yr = _fetch("DFII10", fallback=0.02)
+	return rf_1yr, rf_10yr
 
 
 def fetch_earnings_data(ticker: str) -> dict:
@@ -1041,7 +1124,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			if factors_available:
 				try:
 					ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors, file=quant_file)
-					fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["rf_ann"], cape, real_rf, file=quant_file)
+					fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["RMA"], ret["CMA"], ret["MOM"], ret["rf_ann"], cape, real_rf, file=quant_file)
 					factor_results[ticker] = {
 						k: v for k, v in fm.items()
 						if k not in ("residuals", "Y_hat")
