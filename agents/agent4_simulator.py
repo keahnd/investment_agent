@@ -284,6 +284,8 @@ def generate_sim_commentary(
         """)
     
     for strat in strategies:
+        if strat not in mc_rebal_port:
+            continue
         fr = mc_rebal_port[strat]
         pct = fr.get('pct', [None]*7)
         data_lines.append(f"""{strat}:
@@ -451,6 +453,7 @@ Rules:
 - Write for an investor reading this at 7am on Monday morning
 - 4-6 paragraphs, 4-6 sentences each
 - Plain prose only — no headers, no bullet points, no markdown
+- Focus more on the macro environment and portfolio recommendations.
 
 Return only the commentary text."""
 

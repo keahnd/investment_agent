@@ -513,6 +513,10 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 	pdf.h1("6. Model Outputs Per Asset")
 
 	tickers  = state["tickers"]
+	rec_lookup = {
+		row["ticker"]: row.get("consensus_action", "HOLD")
+		for row in (state.get("recommendation_table") or [])
+	}
 
 	for ticker in tickers:
 		fr  = (state.get("factor_results")   or {}).get(ticker, {})
@@ -531,7 +535,16 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			pdf.set_bg()
 			pdf.page_header_bar("6. Model Outputs Per Asset (continued)")
 
-		pdf.h2(f"{ticker} — {_safe(val.get('sector', ''))} | {_safe(val.get('industry', ''))}")
+		consensus = rec_lookup.get(ticker, "HOLD")
+		consensus_color = C_GREEN if consensus == "BUY" else C_RED if consensus == "SELL" else C_GREY
+		pdf.set_font("Helvetica", "B", FS_H2)
+		pdf.ln(2)
+		header_text = _safe(f"{ticker} — {val.get('sector', '')} | {val.get('industry', '')}")
+		pdf.set_text_color(*C_ORANGE)
+		pdf.cell(pdf.get_string_width(header_text) + 4, 8, header_text, ln=False)
+		pdf.set_text_color(*consensus_color)
+		pdf.cell(20, 8, _safe(f"[{consensus}]"), ln=True)
+		pdf.set_text_color(*C_WHITE)
 
 		# Two-column layout using fixed positions
 		left_x  = MARGIN
@@ -600,7 +613,6 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			("Confidence",     		"*" * bl_views.get("confidence", 1), 			"{}"),
 			("Conflict", 			bl_views.get("conflict", False), 				"{}"),
 			("Sentiment", 			bl_views.get("sentiment_direction", "neutral"),	"{}"),
-			("Valuation Signal", 	bl_views.get("valuation_signal", "neutral"), 	"{}"),
 		]
 		
 		for label, val_f, fmt in bl_items:
@@ -694,6 +706,18 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			pdf.set_text_color(*C_WHITE)
 			text = fmt.format(val_e) if val_e is not None else "N/A"
 			pdf.cell(35, 5, _safe(text), ln=True)
+
+		# Valuation verdict — color-coded
+		sig = val.get("valuation_signal")
+		sig_color = C_GREEN if sig == "cheap" else C_RED if sig == "expensive" else C_GREY
+		pdf.set_x(right_x)
+		pdf.set_font("Helvetica", "", FS_SMALL)
+		pdf.set_text_color(*C_GREY)
+		pdf.cell(50, 5, "Valuation Signal")
+		pdf.set_font("Helvetica", "B", FS_SMALL)
+		pdf.set_text_color(*sig_color)
+		pdf.cell(35, 5, _safe(sig or "N/A"), ln=True)
+
 		end_y = pdf.get_y()
 
 		# Full reasoning
@@ -750,74 +774,6 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		new_y = max(pdf.get_y(), start_y + len(factor_items) * 5 + len(garch_items) * 5 + 20)
 		pdf.set_y(new_y + 4)
 		pdf.divider()
-
-
-# def format_pe_comparison_table(
-# 	ticker:     str,
-# 	fwd_pe:     float,
-# 	ttm_pe:		float,
-# 	hist_pe:    dict,
-# 	sector_pe:  SectorPEResult,
-# 	peg:        float,
-# ) -> str:
-# 	"""
-# 	Returns a formatted text table for the PDF/email report showing:
-
-# 	PE Comparison for MSFT
-# 	──────────────────────────────────────────────────────────────────
-# 	Metric                   Value       Benchmark         vs Benchmark
-# 	Current forward PE       19.0x       —                 —
-# 	Own 5yr median PE        28.5x       own history       33% discount
-# 	Own 5yr 10th pct PE      20.1x       floor             near floor
-# 	Sector peer median PE    25.8x       Tech sector now   26% discount
-# 	Sector ETF PE            26.2x       XLK               27% discount
-# 	Sector long-run avg PE   28.5x       Damodaran Tech    33% discount
-# 	PEG ratio                1.17        < 1.5 = fair      attractive
-# 	──────────────────────────────────────────────────────────────────
-# 	"""
-# 	rows = []
-
-# 	def pct_diff(value, benchmark):
-# 		if benchmark and benchmark > 0:
-# 			d = (value / benchmark - 1) * 100
-# 			return f"{d:+.0f}%"
-# 		return "—"
-
-# 	rows.append(("Current forward PE",      f"{fwd_pe:.1f}x",     "—",                    "—"))
-# 	rows.append(("Current trailing PE",     f"{ttm_pe:.1f}x",     "—",                    "—"))
-
-# 	if hist_pe.get("median"):
-# 		rows.append(("Own 5yr median PE",   f"{hist_pe['median']:.1f}x", "own history",    pct_diff(fwd_pe, hist_pe["median"])))
-# 	if hist_pe.get("p10"):
-# 		rows.append(("Own 5yr 10th pct PE", f"{hist_pe['p10']:.1f}x",   "historic floor", pct_diff(fwd_pe, hist_pe["p10"])))
-
-# 	if sector_pe.peer_median_pe:
-# 		rows.append(("Sector peer median",  f"{sector_pe.peer_median_pe:.1f}x", f"{sector_pe.sector} peers", pct_diff(fwd_pe, sector_pe.peer_median_pe)))
-# 	if sector_pe.etf_pe:
-# 		etf = SECTOR_ETF_MAP.get(sector_pe.sector, "ETF")
-# 		rows.append(("Sector ETF PE",       f"{sector_pe.etf_pe:.1f}x",  etf,              pct_diff(fwd_pe, sector_pe.etf_pe)))
-# 	if sector_pe.damodaran_pe:
-# 		rows.append(("Sector long-run avg", f"{sector_pe.damodaran_pe:.1f}x", "Damodaran",  pct_diff(fwd_pe, sector_pe.damodaran_pe)))
-
-# 	if peg:
-# 		peg_note = "attractive" if peg < 1.5 else "elevated" if peg > 2.5 else "fair"
-# 		rows.append(("PEG ratio",           f"{peg:.2f}",           "< 1.5 = fair",        peg_note))
-
-# 	# Format as aligned text table
-# 	col_widths = [28, 10, 22, 16]
-# 	header = (
-# 		f"{'Metric':<{col_widths[0]}} {'Value':>{col_widths[1]}}  "
-# 		f"{'Benchmark':<{col_widths[2]}} {'vs Benchmark':>{col_widths[3]}}"
-# 	)
-# 	sep = "─" * (sum(col_widths) + 6)
-# 	lines = [f"\nPE Comparison — {ticker}", sep, header, sep]
-# 	for m, v, b, d in rows:
-# 		lines.append(
-# 			f"{m:<{col_widths[0]}} {v:>{col_widths[1]}}  "
-# 			f"{b:<{col_widths[2]}} {d:>{col_widths[3]}}"
-# 		)
-# 	lines.append(sep)
-# 	return "\n".join(lines)
 
 
 def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: dict):

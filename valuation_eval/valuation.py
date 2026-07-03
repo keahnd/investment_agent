@@ -120,6 +120,7 @@ def compute_valuation_signal(
 		"signal_breakdown":        signals,
 	}
 
+
 def _fetch_historical_values(ticker: str, years: int = 3) -> dict:
 	"""
 	Fetches historical PEG and PE values for the given ticker
@@ -158,7 +159,8 @@ def _fetch_historical_values(ticker: str, years: int = 3) -> dict:
 	except Exception as e:
 		print(f"Historical fetch failed for {ticker}: {e}")
 		return (_empty_pe_range(), _empty_peg_range(), None)
-	
+
+
 def _fetch_historical_pe_range(earnings: Optional[pd.DataFrame], hist_prices: pd.Series) -> dict:
 	"""
 	Computes the stock's own trailing PE percentiles over the past N years.

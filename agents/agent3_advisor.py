@@ -67,87 +67,24 @@ def build_sector_constraints(tickers, valuation, constraints):
     
     return sector_mapper, sector_lower, sector_upper
 
-
-def compute_value_recommendation(ticker: str, current_weight: float,
-								bl_view: dict, valuation_result: dict,
-								quality_metrics: dict) -> dict:
-	"""
-	Determines BUY / HOLD / SELL / TRIM based on combined signals.
-	Properly weights quality businesses at historically cheap valuations.
-	"""
-	view_delta   = bl_view.get("view_return_delta", 0.0)
-	val_signal   = valuation_result.get("valuation_signal", "fair")
-	pe_pctile    = valuation_result.get("pe_percentile_vs_history")
-	peg          = quality_metrics.get("peg")
-	consec_beats = quality_metrics.get("consecutive_beats", 0)
-	gross_margin = quality_metrics.get("gross_margin", 0)
-
-	# ── Quality score (0–3) ──
-	quality_score = 0
-	if gross_margin > 0.50:   quality_score += 1
-	if consec_beats >= 4:     quality_score += 1
-	if peg is not None and peg < 1.5: quality_score += 1
-
-	# ── Signal strength ──
-	historically_cheap = (
-		val_signal == "cheap" or
-		(pe_pctile is not None and pe_pctile < 30)
-	)
-	historically_expensive = (
-		val_signal == "expensive" and
-		(pe_pctile is None or pe_pctile > 70)
-	)
-
-	# ── Decision matrix ──
-	if historically_cheap and quality_score >= 2 and view_delta > 0:
-		action = "BUY"
-		note = (
-			f"High-quality business at historically cheap valuation "
-			f"(PE at {pe_pctile:.0f}th percentile of own history). "
-			f"PEG {peg:.2f}, {consec_beats} consecutive earnings beats."
-		)
-	elif historically_cheap and quality_score >= 1:
-		action = "BUY"
-		note = "Historically cheap valuation with solid quality metrics."
-	elif historically_expensive and view_delta < -0.02:
-		action = "SELL"
-		note = "Trading above historical PE range with negative forward view."
-	elif historically_expensive and current_weight > 0.10:
-		action = "TRIM"
-		note = "Position size elevated; valuation historically stretched."
-	elif view_delta > 0.03 and not historically_expensive:
-		action = "BUY"
-		note = "Positive BL view with fair-to-cheap valuation."
-	else:
-		action = "HOLD"
-		note = "No compelling action signal at current valuation."
-
-	return {
-		"ticker":          ticker,
-		"action":          action,
-		"view_delta":      view_delta,
-		"valuation_signal": val_signal,
-		"pe_percentile":   pe_pctile,
-		"quality_score":   quality_score,
-		"note":            note
-	}
-
 # ───────────────────────────────────────────────────────────────────────────
 # STAGE 1 — composite score
 # ───────────────────────────────────────────────────────────────────────────
 
 SCORE_WEIGHTS = {
-    "bl_view_delta":    0.40,   # forward return vs market — highest weight
-    "pe_percentile":    0.25,   # cheapness vs own history and sector
-    "valuation_signal": 0.20,   # combined cheap/fair/expensive signal
-    "quality":          0.15,   # gross margin, earnings beats, PEG
+    "bl_view_delta":    0.25,   # forward return vs market — highest weight
+    "pe_percentile":    0.30,   # cheapness vs own history and sector
+    "valuation_signal": 0.25,   # combined cheap/fair/expensive signal
+    "quality":          0.20,   # gross margin, earnings beats, PEG
 }
 
 
 def compute_composite_score(
     bl_view:           dict,
+    current_weight: float,
     valuation_result:  dict,
-    quality_metrics:   dict,
+    earnings_data: dict, 
+    financial_data: dict
 ) -> float:
     """
     Returns a single score in the range [-1, +1].
@@ -158,6 +95,54 @@ def compute_composite_score(
     """
     components = {}
 
+    view_delta   = bl_view.get("view_return_delta", 0.0)
+    val_signal   = valuation_result.get("valuation_signal", "fair")
+    pe_pctile    = valuation_result.get("pe_vs_history_pctile")
+    peg          = valuation_result.get("peg")
+    consec_beats = earnings_data.get("consecutive_beats") or 0
+    gross_margin = financial_data.get("gross_margin") or 0
+
+    quality_score = 0
+    if gross_margin > 0.50:   quality_score += 1
+    if consec_beats >= 4:     quality_score += 1
+    if peg is not None and peg < 1.5: quality_score += 1
+
+    # ── Signal strength ──
+    historically_cheap = (
+        val_signal == "cheap" or
+        (pe_pctile is not None and pe_pctile < 30)
+    )
+    historically_expensive = (
+        val_signal == "expensive" and
+        (pe_pctile is None or pe_pctile > 70)
+    )
+
+    # ── Decision matrix ──
+    if historically_cheap and quality_score >= 2 and view_delta > 0:
+        action = "BUY"
+        pe_str  = f"{pe_pctile:.0f}th percentile" if pe_pctile is not None else "N/A"
+        peg_str = f"{peg:.2f}" if peg is not None else "N/A"
+        note = (
+            f"High-quality business at historically cheap valuation "
+            f"(PE at {pe_str} of own history). "
+            f"PEG {peg_str}, {consec_beats} consecutive earnings beats."
+        )
+    elif historically_cheap and quality_score >= 1:
+        action = "BUY"
+        note = "Historically cheap valuation with solid quality metrics."
+    elif historically_expensive and view_delta < -0.02:
+        action = "SELL"
+        note = "Trading above historical PE range with negative forward view."
+    elif historically_expensive and current_weight > 0.05:
+        action = "TRIM"
+        note = "Position size elevated; valuation historically stretched."
+    elif view_delta > 0.03 and not historically_expensive:
+        action = "BUY"
+        note = "Positive BL view with fair-to-cheap valuation."
+    else:
+        action = "HOLD"
+        note = "No compelling action signal at current valuation."
+
     # ── BL view delta → [-1, +1] ──────────────────────────────────────────
     # Typical range is roughly -0.15 to +0.15 (annualised excess return).
     # Clip and scale so ±15% maps to ±1.
@@ -167,13 +152,12 @@ def compute_composite_score(
     # ── PE percentile → [-1, +1] ──────────────────────────────────────────
     # pe_percentile is 0–100 where LOW = historically cheap = GOOD.
     # Invert and centre: 0th pct → +1.0, 50th → 0.0, 100th → -1.0
-    pe_pctile = valuation_result.get("pe_vs_history_pctile")
     if pe_pctile is not None:
         components["pe_percentile"] = 1.0 - (pe_pctile / 50.0)   # 0→+1, 50→0, 100→-1
         components["pe_percentile"] = float(np.clip(components["pe_percentile"], -1.0, 1.0))
     else:
         # No history available — fall back to sector comparison
-        sector_prem = valuation_result.get("pe_vs_sector_premium_pct", 0.0) or 0.0
+        sector_prem = valuation_result.get("pe_vs_sector_ratio", 0.0) or 0.0
         # -30% discount vs sector → +0.6, +30% premium → -0.6
         components["pe_percentile"] = float(np.clip(-sector_prem / 50.0, -1.0, 1.0))
 
@@ -190,7 +174,6 @@ def compute_composite_score(
     # Quality only adds to score, never subtracts — a low-quality stock
     # at a cheap valuation still gets a positive valuation signal,
     # it just doesn't get the quality bonus.
-    quality_score = quality_metrics.get("quality_score", 0)   # 0–3 from existing function
     components["quality"] = float(np.clip(quality_score / 3.0, 0.0, 1.0))
 
     # ── Weighted sum ───────────────────────────────────────────────────────
@@ -200,7 +183,11 @@ def compute_composite_score(
         if k in components
     )
 
-    return float(np.clip(total, -1.0, 1.0))
+    return {
+        "composite_score": float(np.clip(total, -1.0, 1.0)),
+        "action":          action,
+        "note":            note,
+    }
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -213,8 +200,8 @@ def rank_and_rebalance(
     max_position:     float = 0.25,    # hard ceiling per ticker
     min_position:     float = 0.02,    # hard floor (set to 0 to allow full exit)
     max_adjust:       float = 0.05,    # maximum weight change in a single rebalance
-    sell_threshold:   float = -0.40,   # composite score below this → force to min
-    buy_threshold:    float = 0.40,    # composite score above this → eligible for max
+    sell_threshold:   float = -0.75,   # composite score below this → force to min
+    buy_threshold:    float = 0.75,    # composite score above this → eligible for max
 ) -> list[dict]:
     """
     Converts per-ticker composite scores into new portfolio weights.
@@ -225,7 +212,7 @@ def rank_and_rebalance(
         {
           "ticker":            str,
           "composite_score":   float,   from compute_composite_score()
-          "action":            str,     from compute_value_recommendation()
+          "action":            str,     from compute_composite_score()
           "current_weight":    float,
           "bl_view":           dict,
           "valuation_result":  dict,
@@ -326,30 +313,14 @@ def rank_and_rebalance(
     results = []
     for i, analysis in enumerate(ticker_analyses):
         ticker = tickers[i]
-        cw     = current_weights.get(ticker, 0.0)
         nw     = float(new_weights[i])
-        adj    = nw - cw
 
         results.append({
             "ticker":          ticker,
-            "rank":            int(ranks[i]),
-            "composite_score": round(float(scores[i]), 3),
-            "current_weight":  round(cw, 4),
-            "adjustment":      round(adj, 4),
             "new_weight":      round(nw, 4),
-            "action":          analysis.get("action", "HOLD"),
-            "note":            analysis.get("note", ""),
-            "score_components": {
-                "bl_view_delta":    round(float(scores_arr[i]), 3),
-                "pe_percentile":    analysis.get("valuation_result", {}).get("pe_vs_history_pctile"),
-                "valuation_signal": analysis.get("valuation_result", {}).get("valuation_signal"),
-                "quality_score":    analysis.get("quality_metrics", {}).get("quality_score"),
-            }
         })
 
-    # Sort output by rank (best opportunity first)
-    results.sort(key=lambda x: x["rank"])
-    return results
+    return {row["ticker"]: row["new_weight"] for row in results}
 
 
 def _recentre_adjustments(adjustments: np.ndarray, analyses: list[dict]):
@@ -377,6 +348,55 @@ def _recentre_adjustments(adjustments: np.ndarray, analyses: list[dict]):
     per_ticker = residual / len(eligible)
     for i in eligible:
         adjustments[i] -= per_ticker
+
+    
+def value_rebalancing(
+	tickers:         list[str],
+	current_weights: dict[str, float],
+	bl_views:        dict,
+	valuation:       dict,
+	financial_health: dict,
+	earnings_data:   dict,
+) -> dict[str, float]:
+	"""
+	Builds composite scores from BL views + valuation + quality, ranks tickers,
+	and returns a {ticker: new_weight} dict matching the format of other strategies.
+	"""
+	ticker_analyses = []
+	for ticker in tickers:
+		raw_bl  = bl_views.get(ticker, {})
+		bl_view = {**raw_bl, "view_return_delta": raw_bl.get("view_return", 0.0)}
+		val     = valuation.get(ticker, {})
+		fh      = financial_health.get(ticker, {})
+		ed      = earnings_data.get(ticker, {})
+		cw      = current_weights.get(ticker, 0.0)
+
+		score_result = compute_composite_score(
+			bl_view          = bl_view,
+			current_weight   = cw,
+			valuation_result = val,
+			earnings_data    = ed,
+			financial_data   = fh,
+		)
+
+		ticker_analyses.append({
+			"ticker":           ticker,
+			"composite_score":  score_result["composite_score"],
+			"action":           score_result["action"],
+			"note":             score_result.get("note", ""),
+			"current_weight":   cw,
+			"bl_view":          bl_view,
+			"valuation_result": val,
+			"quality_metrics":  fh,
+		})
+
+	return rank_and_rebalance(
+		ticker_analyses = ticker_analyses,
+		current_weights = current_weights,
+		max_position    = 0.25,
+		min_position    = 0.02,
+		max_adjust      = 0.05,
+	)
 
 
 def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
@@ -447,7 +467,8 @@ def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
         return None, str(e)
 
 
-def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraints):
+def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraints,
+                     current_weights, bl_views, financial_health, earnings_data):
     """
     Runs all optimisation strategies and returns results dict.
     All strategy weights stored for report comparison.
@@ -513,12 +534,19 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         errors.append(f"Robust MV failed: {e}")
         results["robust_mv"] = None
         
-	# ── Value Based Investing ───────────────────────────────────────
-    # try:
-    #     results["value_invest"] = dict(ef.clean_weights())
-    # except Exception as e:
-    #     errors.append(f"Value Investing failed: {e}")
-    #     results["value_invest"] = None
+    # ── Value Based Investing ───────────────────────────────────────
+    try:
+        results["value_invest"] = value_rebalancing(
+            tickers          = tickers,
+            current_weights  = current_weights,
+            bl_views         = bl_views,
+            valuation        = valuation,
+            financial_health = financial_health,
+            earnings_data    = earnings_data,
+        )
+    except Exception as e:
+        errors.append(f"Value Investing failed: {e}")
+        results["value_invest"] = None
 
     return results, errors
 
@@ -655,6 +683,8 @@ Important context to apply:
     and consecutive beats to estimate if it will be positive. Don't let uncertainty contribute to a
     negative or positive outlook. Uncertainty should be treated as uncertainty, but use the EPS surprise
     as a guideline or estimate.
+  - Match the valuation signal from the valuation metrics, unless there is a very good reason not to.
+    Mention the reason if applicable
     
 Calibration guide for view_return:
   Strongly positive sentiment + cheap valuation  → +0.04 to +0.06
@@ -721,7 +751,7 @@ def generate_sentiment_views(
         earnings_dates: dict,
         valuations: dict,
         financial_health: dict, 
-    	earnings_data: dict,
+        earnings_data: dict,
         aaii_sentiment: dict,
         fear_greed: dict,
         cape: float,
@@ -749,8 +779,8 @@ def generate_sentiment_views(
         News Summary: {sent}, \
         Next Earnings Date: {earnings_date}
         Valuation Data: {valuation}
-		Financial Data: {finances}
-		Earnings Data: {earnings}""")
+        Financial Data: {finances}
+        Earnings Data: {earnings}""")
 
     prompt = SENTIMENT_PROMPT.format(
         data="\n".join(data_lines),
@@ -831,6 +861,10 @@ def agent3_advisor(state: PipelineState) -> dict:
         tickers,
         state["valuation"],
         constraints,
+        current_weights  = state["current_weights"],
+        bl_views         = bl_views,
+        financial_health = state.get("financial_health") or {},
+        earnings_data    = state.get("earnings_data")    or {},
     )
 
     errors.extend(opt_error)
@@ -850,6 +884,5 @@ def agent3_advisor(state: PipelineState) -> dict:
         "posterior_mu": posterior_mu,
         "recommended_weights": recommended_weights,
         "recommendation_table": recommendation_table,
-        "advisory_commentary": "[STUB] Advisory commentary not yet implemented.",
         "errors": errors
     }
