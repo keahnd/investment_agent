@@ -3,6 +3,7 @@ Portfolio Pipeline — Main Entry Point
 """
 
 import csv
+import logging
 from datetime import date, datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -21,6 +22,22 @@ from scraper.wealthsimple_scraper 	import scrape_user_holdings
 
 load_dotenv()
 
+logger = logging.getLogger("investment_agent")
+
+
+def _setup_logger(log_path: Path) -> None:
+	logger.setLevel(logging.DEBUG)
+	logger.handlers.clear()
+	fmt = logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", "%H:%M:%S")
+	fh = logging.FileHandler(log_path, encoding="utf-8")
+	fh.setLevel(logging.DEBUG)
+	fh.setFormatter(fmt)
+	sh = logging.StreamHandler()
+	sh.setLevel(logging.INFO)
+	sh.setFormatter(fmt)
+	logger.addHandler(fh)
+	logger.addHandler(sh)
+
 
 def fetch_usd_cad_rate() -> float:
     """
@@ -34,7 +51,7 @@ def fetch_usd_cad_rate() -> float:
             return float(rate)
     except:
         pass
-    print("  [warn] USD/CAD fetch failed, using fallback rate of 1.36")
+    logger.warning("USD/CAD fetch failed, using fallback rate of 1.36")
     return 1.36
 
 
@@ -98,15 +115,15 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 
 def run_user(user_path: Path) -> None:
 	user_name = user_path.name
-	print(f"\n{'='*60}")
-	print(f"  Running pipeline for: {user_name}")
-	print(f"{'='*60}")
-
 	today = datetime.today().strftime("%Y-%m-%d")
 	user_email = get_user_email(user_path)
 
 	report_dir = user_path / "reports" / f"{today}"
 	report_dir.mkdir(exist_ok=True)
+	_setup_logger(report_dir / f"pipeline_{today}.log")
+	logger.info(f"{'='*60}")
+	logger.info(f"  Running pipeline for: {user_name}")
+	logger.info(f"{'='*60}")
 	output_path = report_dir / f"recommendation_{today}.txt"
 	vp_output = report_dir / f"virtual_portfolio_{today}.txt"
 	asset_analysis =  report_dir / "asset_analysis"
@@ -116,7 +133,7 @@ def run_user(user_path: Path) -> None:
 		# scrape wealthsimple for up to date holdings
 		scrape_user_holdings(user_path)
 	except Exception as e:
-		print(f"Scraper failed for {user_name}: {e}")
+		logger.warning(f"Scraper failed for {user_name}: {e}")
 		send_error_email(user_name, f"Scraper failed — using last CSV for {user_name}: {e}")
     	# pipeline continues with whatever portfolio.csv already exists
 	
@@ -169,18 +186,16 @@ def run_user(user_path: Path) -> None:
 		}
 
 		final_state = pipeline_graph.invoke(initial_state)
-		print(f"\n  Keys in final state: {list(final_state.keys())}")
-		print(f"  Agent 1 summaries populated: {final_state['summaries'] is not None}")
-		print(f"  Agent 3 commentary populated: {final_state['advisory_commentary'] is not None}")
-
-		# Print results
-		print(f"\n  Done. Errors: {final_state['errors']}")
+		logger.info(f"Keys in final state: {list(final_state.keys())}")
+		logger.info(f"Agent 1 summaries populated: {final_state['summaries'] is not None}")
+		logger.info(f"Agent 3 commentary populated: {final_state['advisory_commentary'] is not None}")
+		logger.info(f"Done. Errors: {final_state['errors']}")
 	
 		# Step 3 — persist
 		db_errors = persist_to_database(final_state, conn)
 		if db_errors:
 			for e in db_errors:
-				print(f"  [db error] {e}")
+				logger.error(f"[db error] {e}")
 
 		# Step 4 — reconcile
 		reconcile_result = None
@@ -188,13 +203,13 @@ def run_user(user_path: Path) -> None:
 			with open(vp_output, 'w', encoding='utf-8') as f:
 				reconcile_result = reconcile_virtual_portfolio(conn, today, f)
 		except Exception as e:
-			print(f"  [warn] Reconciler failed: {e}")
+			logger.warning(f"Reconciler failed: {e}")
 
 		# Step 5 — build divergence data for report
 		try:
 			divergence_data = build_divergence_data(conn, today, reconcile_result)
 		except Exception as e:
-			print(f"  [warn] Divergence data build failed: {e}")
+			logger.warning(f"Divergence data build failed: {e}")
 			divergence_data = None
 
 		with open(output_path, 'w', encoding='utf-8') as f:
@@ -225,9 +240,11 @@ def run_user(user_path: Path) -> None:
 	
 	except Exception as e:
 		tb = traceback.format_exc()
-		print(f"\n [ERROR] Pipeline failed for {user_name}: {e}")
-		print(tb)
+		logger.error(f"Pipeline failed for {user_name}: {e}")
+		logger.error(tb)
 		send_error_email(user_name, str(e), tb)
+	finally:
+		logger.handlers.clear()
 
 
 def main():

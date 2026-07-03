@@ -9,12 +9,15 @@ Two functions:
   send_error_email()   — pipeline failure alert to operator
 """
 
+import logging
 import os
 import base64
 from pathlib import Path
 from datetime import date
 
 from sendgrid import SendGridAPIClient
+
+logger = logging.getLogger("investment_agent")
 from sendgrid.helpers.mail import (
     Mail, Attachment, FileContent, FileName,
     FileType, Disposition
@@ -140,14 +143,14 @@ def send_report_email(
         response = client.send(message)
 
         if response.status_code in (200, 202):
-            print(f"  [Email] Report sent to {user_email} — status {response.status_code}")
+            logger.info(f"[Email] Report sent to {user_email} — status {response.status_code}")
             return True
         else:
-            print(f"  [Email] Unexpected status {response.status_code} sending to {user_email}")
+            logger.warning(f"[Email] Unexpected status {response.status_code} sending to {user_email}")
             return False
 
     except Exception as e:
-        print(f"  [Email] Failed to send report to {user_email}: {e}")
+        logger.error(f"[Email] Failed to send report to {user_email}: {e}")
         return False
     
     
@@ -172,7 +175,7 @@ def send_error_email(
     operator = os.environ.get("OPERATOR_EMAIL")
 
     if not operator:
-        print("  [Email] OPERATOR_EMAIL not set — cannot send error alert")
+        logger.warning("[Email] OPERATOR_EMAIL not set — cannot send error alert")
         return False
 
     subject = f"[PIPELINE ERROR] Failed for {user_name} — {date.today()}"
@@ -202,12 +205,12 @@ Check the pipeline logs for more detail.
         response = client.send(message)
 
         if response.status_code in (200, 202):
-            print(f"  [Email] Error alert sent to operator — status {response.status_code}")
+            logger.info(f"[Email] Error alert sent to operator — status {response.status_code}")
             return True
         else:
-            print(f"  [Email] Failed to send error alert — status {response.status_code}")
+            logger.warning(f"[Email] Failed to send error alert — status {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"  [Email] Error sending failure alert: {e}")
+        logger.error(f"[Email] Error sending failure alert: {e}")
         return False

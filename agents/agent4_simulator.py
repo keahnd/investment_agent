@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
@@ -5,6 +6,8 @@ from pathlib import Path
 
 from agents.state import PipelineState
 from agents.llm import get_llm
+
+logger = logging.getLogger("investment_agent")
 
 
 def get_mu_for_tickers(tickers: list, state: PipelineState) -> list:
@@ -306,7 +309,7 @@ def generate_sim_commentary(
         print(f"\n LLM Commentary:{response.content.strip()}", file=file)
         return response.content.strip()
     except Exception as e:
-        print(f"    [warn] LLM commentary failed: {e}")
+        logger.warning(f"LLM sim commentary failed: {e}")
         return "Simulation commentary unavailable this run."
     
     
@@ -498,7 +501,7 @@ def generate_advisory_commentary(
         return response.content.strip()
 
     except Exception as e:
-        print(f"    [warn] Advisory commentary LLM call failed: {e}")
+        logger.warning(f"Advisory commentary LLM call failed: {e}")
         return (
             "Advisory commentary unavailable this run. "
             "Review the recommendation table and simulation results directly."
@@ -518,9 +521,9 @@ def agent4_simulator(state: PipelineState) -> dict:
     Returns:
         Partial state update dict with keys: mc_current, mc_rebalanced, risk_commentary, errors.
     """
-    print(f"  [Agent 4] Simulator running")
+    logger.info("[Agent 4] Simulator running")
     tickers  = state["tickers"]
-    print(f"            Tickers : {tickers}")
+    logger.info(f"  Tickers : {tickers}")
     errors   = list(state.get("errors") or [])
     existing_errors = len(errors)
     covar = pd.DataFrame(state["covariance_matrix"])
@@ -540,13 +543,13 @@ def agent4_simulator(state: PipelineState) -> dict:
     mc_port_rebalanced = {}
 
     for ticker in tickers:
-        print(f"\nMonte Carlo Sim: Ticker ({ticker})")
+        logger.info(f"  Monte Carlo Sim: Ticker ({ticker})")
         state_info = port_info[ticker]
         dir_name = ticker.removesuffix(".TO")
         (sum_dir / dir_name).mkdir(parents=True, exist_ok=True)
         with open(sum_dir / dir_name / "sim.txt", "w", encoding="utf-8") as f:
             if not state_info.get("s_current"):
-                print(f"  [WARN] No valid price for {ticker} — skipping simulation.")
+                logger.warning(f"No valid price for {ticker} — skipping simulation.")
                 mc_current[ticker] = {}
                 continue
             mc_current[ticker] = run_monte_carlo(
@@ -556,14 +559,14 @@ def agent4_simulator(state: PipelineState) -> dict:
     port_sum_dir = sum_dir / "_portfolio"
     port_sum_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nMonte Carlo Sim: current weights")
+    logger.info("  Monte Carlo Sim: current weights")
     with open(port_sum_dir / "mc_current.txt", "w", encoding="utf-8") as f:
         mc_port_current = port_monte_carlo(mu_vec, Sigma, total_value, curr_weights, file=f)
 
     for strategy in strategies:
-        print(f"\nMonte Carlo Sim: Rebalanced ({strategy})")
+        logger.info(f"  Monte Carlo Sim: Rebalanced ({strategy})")
         if state["recommended_weights"].get(strategy) is None:
-            print(f"Recommendation failed for {strategy}")
+            logger.warning(f"Recommendation failed for {strategy}")
             continue
         weights = [state["recommended_weights"][strategy][ticker] for ticker in tickers]
         with open(port_sum_dir / f"mc_{strategy}.txt", "w", encoding="utf-8") as f:
@@ -579,7 +582,7 @@ def agent4_simulator(state: PipelineState) -> dict:
             errors.append(f"Sim Commentary Failed: {e}")
             sim_commentary = None
             
-    print(f"\n  [Agent 4] Complete. New Errors: {len(errors) - existing_errors}")
+    logger.info(f"[Agent 4] Complete. New Errors: {len(errors) - existing_errors}")
     
     advisory_commentary = generate_advisory_commentary(
         tickers                  = state["tickers"],

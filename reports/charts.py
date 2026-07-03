@@ -8,11 +8,14 @@ already computed from 10k simulation in Agent 4.
 Returns a dict of {chart_name: file_path} for report embedding.
 """
 
+import logging
 import numpy as np
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from pathlib import Path
+
+logger = logging.getLogger("investment_agent")
 
 
 # ── Dark theme constants ──────────────────────────────────────────
@@ -182,7 +185,7 @@ def generate_all_charts(state: dict, charts_dir: Path) -> dict:
 	"""
 	charts_dir.mkdir(parents=True, exist_ok=True)
 	tickers     = state["tickers"]
-	print(f"      Generating {len(tickers)} ticker charts...")
+	logger.info(f"  Generating {len(tickers)} ticker charts...")
  
 	# Per-ticker charts — read paths directly from state
 	for ticker in tickers:
@@ -191,13 +194,13 @@ def generate_all_charts(state: dict, charts_dir: Path) -> dict:
 		paths = mc.get("sample_paths")          # already in state from Agent 4
 		
 		if paths is None:
-			print(f"      [warn] No paths in state for {ticker}, skipping chart")
+			logger.warning(f"No paths in state for {ticker}, skipping chart")
 			continue
 		
 		paths = np.array(paths)          # convert back from list if JSON roundtrip
 		s0    = ms.get("s_current")
 		if s0 is None or not np.isfinite(s0) or not np.isfinite(paths[-1, :]).any():
-			print(f"      [warn] Non-finite simulation data for {ticker}, skipping chart")
+			logger.warning(f"Non-finite simulation data for {ticker}, skipping chart")
 			continue
 
 		output_path = charts_dir / f"mc_{ticker}.png"
@@ -221,7 +224,7 @@ def generate_all_charts(state: dict, charts_dir: Path) -> dict:
 			output_path = charts_dir / "mc_portfolio_current.png",
 		)
 	else:
-		print(f"      [warn] No paths in state for current port, skipping chart")
+		logger.warning("No paths in state for current port, skipping chart")
 
 	# Per-strategy charts
 	for strategy, sim in (state.get("mc_port_rebalanced") or {}).items():
@@ -229,7 +232,7 @@ def generate_all_charts(state: dict, charts_dir: Path) -> dict:
 			continue
 		strat_paths = sim.get("sample_paths")
 		if strat_paths is None:
-			print(f"      [warn] No paths in state for {strategy}, skipping chart")
+			logger.warning(f"No paths in state for {strategy}, skipping chart")
 			continue
 		generate_portfolio_chart(
 			title       = f"{strategy.replace('_', ' ').title()} Portfolio",

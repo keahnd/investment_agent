@@ -18,6 +18,7 @@ Agent 4 reads mu_sigma for simulation inputs.
 
 import os
 import json
+import logging
 import time
 import re
 from datetime import date, datetime, timedelta
@@ -35,6 +36,8 @@ from dotenv import load_dotenv
 from agents.state import PipelineState
 from agents.llm import get_llm
 from valuation_eval.valuation import compute_valuation_signal
+
+logger = logging.getLogger("investment_agent")
 
 # Constants
 R2_LOW_THRESHOLD       = 0.15
@@ -97,7 +100,7 @@ def _download_with_retry(tickers: list[str], start: date, end: date) -> pd.DataF
 			return data
 		except Exception as e:
 			if attempt < 4:
-				print(f"  [WARN] Download failed ({e}). Retrying in {wait}s...")
+				logger.warning(f"Download failed ({e}). Retrying in {wait}s...")
 				time.sleep(wait)
 			else:
 				raise RuntimeError(f"Failed to download price data after 5 attempts: {e}")
@@ -143,7 +146,7 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
 		# If all price entries are NaN then remove column
 		stale = [t for t in cached.columns if cached[t].isna().all()]
 		if stale:
-			print(f"  [Cache] Dropping all-NaN columns for re-download: {stale}")
+			logger.debug(f"Cache: Dropping all-NaN columns for re-download: {stale}")
 			cached = cached.drop(columns=stale)
 
 		last_cached = cached.index[-1].date()
@@ -151,34 +154,34 @@ def fetch_prices(tickers: list[str], start_date: date, today: date, force_refres
 		# If new tickers added then only download the new ones
 		missing_tickers = [t for t in all_tickers if t not in cached.columns]
 		if missing_tickers:
-			print(f"  [Cache] New tickers {missing_tickers} — downloading full history...")
+			logger.info(f"Cache: New tickers {missing_tickers} — downloading full history...")
 			new_cols = _download_translated(missing_tickers, start_date, last_cached  + timedelta(days=1))
 			cached = cached.join(new_cols, how='left')
 			still_null = [t for t in missing_tickers if t in cached.columns and cached[t].isna().all()]
 			if still_null:
-				print(f"  [Cache] WARNING: {still_null} are still all-NaN after download — symbol may be invalid.")
+				logger.warning(f"Cache: {still_null} are still all-NaN after download — symbol may be invalid.")
 			cached.to_parquet(CACHE_FILE)
-			print(f"  [Cache] New tickers added and saved.")
+			logger.debug("Cache: New tickers added and saved.")
 
 		if last_cached >= today - timedelta(days=1):
-			print(f"  [Cache] Up to date ({last_cached}). Loading from {CACHE_FILE}")
+			logger.debug(f"Cache: Up to date ({last_cached}). Loading from {CACHE_FILE}")
 			data = cached
 		else:
 			gap_start = last_cached + timedelta(days=1)
-			print(f"  [Cache] Updating from {gap_start} to {today}...")
+			logger.info(f"Cache: Updating from {gap_start} to {today}...")
 			new_data = _download_translated(all_tickers, gap_start, today + timedelta(days=1))
 			if not new_data.empty:
 				data = pd.concat([cached, new_data]).drop_duplicates().sort_index().dropna(how='all')
 				data.to_parquet(CACHE_FILE)
-				print(f"  [Cache] Updated and saved to {CACHE_FILE}")
+				logger.debug(f"Cache: Updated and saved to {CACHE_FILE}")
 			else:
-				print(f"  [Cache] No new rows available yet, using cached data.")
+				logger.debug("Cache: No new rows available yet, using cached data.")
 				data = cached
 	else:
-		print("  [Cache] No cache found. Downloading full history...")
+		logger.info("Cache: No cache found. Downloading full history...")
 		data = _download_translated(all_tickers, start_date, today + timedelta(days=1))
 		data.to_parquet(CACHE_FILE)
-		print(f"  [Cache] Prices saved to {CACHE_FILE}")
+		logger.debug(f"Cache: Prices saved to {CACHE_FILE}")
 
 	return data
 
@@ -204,12 +207,12 @@ def fetch_ff_factors(today: date, start: date, force_refresh: bool = False) -> p
 		last_cached = cached.index[-1].date()
 
 		if last_cached >= (today - timedelta(days=5)):  # FF data has a few-day publishing lag
-			print(f"  [FF Cache] Up to date ({last_cached}). Loading from {FF_CACHE_FILE}")
+			logger.debug(f"FF Cache: Up to date ({last_cached}). Loading from {FF_CACHE_FILE}")
 			return cached
 
-		print(f"  [FF Cache] Stale ({last_cached}). Re-downloading...")
+		logger.info(f"FF Cache: Stale ({last_cached}). Re-downloading...")
 
-	print("  [FF Cache] Downloading Fama-French daily factors...")
+	logger.info("FF Cache: Downloading Fama-French daily factors...")
 	url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_daily_CSV.zip"
 	response = requests.get(url, timeout=30)
 	response.raise_for_status()
@@ -228,7 +231,7 @@ def fetch_ff_factors(today: date, start: date, force_refresh: bool = False) -> p
 	factors = raw / 100  # convert percent → decimal
 	factors = factors.loc[start:today]
 	factors.to_parquet(FF_CACHE_FILE)
-	print(f"  [FF Cache] Saved to {FF_CACHE_FILE}")
+	logger.debug(f"FF Cache: Saved to {FF_CACHE_FILE}")
 	return factors
 
 
@@ -488,7 +491,7 @@ def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
 
 	entry = cache.get(ticker, {})
 	if entry.get('date') == today:
-		print(f"  [Val Cache] {ticker}: loaded from cache.")
+		logger.debug(f"Val Cache: {ticker}: loaded from cache.")
 		return entry['metrics']
 
 	for attempt in range(4):
@@ -520,10 +523,10 @@ def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
 		except Exception as e:
 			wait = 30 * (attempt + 1)
 			if attempt < 3:
-				print(f'  [WARN] {ticker} metrics failed ({e}). Retrying in {wait}s...')
+				logger.warning(f"{ticker} metrics failed ({e}). Retrying in {wait}s...")
 				time.sleep(wait)
 			else:
-				print(f'  [WARN] {ticker} metrics unavailable after 4 attempts, skipping.')
+				logger.warning(f"{ticker} metrics unavailable after 4 attempts, skipping.")
 				return {'peg': None, 'fwd_pe': None, 'ttm_pe': None, 'ev_ebitda': None,
 						'target_price': None, 'analyst_rec': None, '200MA': None, '50MA': None,
 						'sector': None, 'industry': None}
@@ -664,7 +667,7 @@ def fetch_financial_health(ticker: str) -> dict:
 		return financial_health
 
 	except Exception as e:
-		print(f"    [warn] Financial health fetch failed for {ticker}: {e}")
+		logger.warning(f"Financial health fetch failed for {ticker}: {e}")
 		return {}
 
 
@@ -704,7 +707,7 @@ def fetch_cape() -> float:
 		return cape
 	
 	except Exception as e:
-		print(f"  [CAPE] Failed to fetch: {e}. Using fallback value of 25.0")
+		logger.warning(f"CAPE failed to fetch: {e}. Using fallback value of 25.0")
 		return 25.0
 
 
@@ -723,7 +726,7 @@ def fetch_real_rf() -> float:
 	"""
 	api_key = os.getenv("FRED_API_KEY")
 	if not api_key:
-		print("  [Real RF] FRED_API_KEY not set. Using fallback of 2%")
+		logger.warning("Real RF: FRED_API_KEY not set. Using fallback of 2%")
 		return 0.02
 
 	url = "https://api.stlouisfed.org/fred/series/observations"
@@ -740,11 +743,11 @@ def fetch_real_rf() -> float:
 		for obs in response.json()["observations"]:
 			if obs["value"] != ".":
 				real_rf = float(obs["value"]) / 100
-				print(f"  [Real RF] TIPS 10yr real yield ({obs['date']}): {real_rf:.2%}")
+				logger.debug(f"Real RF: TIPS 10yr real yield ({obs['date']}): {real_rf:.2%}")
 				return real_rf
 		raise ValueError("No valid DFII10 observations in response")
 	except Exception as e:
-		print(f"  [Real RF] FRED fetch failed ({e}). Using fallback of 2%")
+		logger.warning(f"Real RF: FRED fetch failed ({e}). Using fallback of 2%")
 		return 0.02
 
 
@@ -808,7 +811,7 @@ def fetch_earnings_data(ticker: str) -> dict:
 			}
 	
 	except Exception as e:
-		print(f"    [warn] Earnings data fetch failed for {ticker}: {e}")
+		logger.warning(f"Earnings data fetch failed for {ticker}: {e}")
 	
 	return {"next_earnings_date": None, "recent_quarters": [], "avg_eps_surprise_pct": None, "consecutive_beats": None}
 
@@ -943,7 +946,7 @@ def generate_quant_commentary(
 		print(f"\n LLM Commentary:{response.content.strip()}", file=file)
 		return response.content.strip()
 	except Exception as e:
-		print(f"    [warn] LLM commentary failed: {e}")
+		logger.warning(f"LLM quant commentary failed: {e}")
 		return "Quantitative commentary unavailable this run."
 	
 
@@ -964,9 +967,9 @@ def agent2_quant(state: PipelineState) -> dict:
 		mu_sigma, valuation, financial_health, earnings_data, earnings_dates,
 		quant_commentary, errors.
 	"""
-	print(f"\n  [Agent 2] Quant analyst running")
+	logger.info("[Agent 2] Quant analyst running")
 	tickers  = state["tickers"]
-	print(f"            Tickers : {tickers}")
+	logger.info(f"  Tickers : {tickers}")
 	run_date = date.fromisoformat(state["run_date"])
 	start_date = (date.today() - timedelta(days=int(HISTORY_YEARS * 365)))
 	errors   = list(state.get("errors") or [])
@@ -982,12 +985,12 @@ def agent2_quant(state: PipelineState) -> dict:
 	earnings_dates   = {}
 
 	# Fetch Prices
-	print(f"\n    Downloading {HISTORY_YEARS}yr price history...")
+	logger.info(f"  Downloading {HISTORY_YEARS}yr price history...")
 	try:
 		raw_prices = fetch_prices(tickers, start_date, run_date)
 	except Exception as e:
 		errors.append(f"Price history download failed: {e}")
-		print(f"    [error] Price download failed: {e}")
+		logger.error(f"Price download failed: {e}")
 		# Cannot proceed without price data — return early with stubs
 		return {
 			"factor_results":   {t: {} for t in tickers},
@@ -1019,7 +1022,7 @@ def agent2_quant(state: PipelineState) -> dict:
 		factors_available = True
 	except Exception as e:
 		errors.append(f"Factor history download failed: {e}")
-		print(f"    [error] Factor download failed: {e}")
+		logger.error(f"Factor download failed: {e}")
 
 	# Fetch market-level inputs (once, shared across all tickers)
 	cape    = fetch_cape()
@@ -1101,7 +1104,7 @@ def agent2_quant(state: PipelineState) -> dict:
 		
 
 	# ── LLM anomaly commentary ────────────────────────────────────────────────
-	print(f"\n    Generating quantitative commentary...")
+	logger.info("  Generating quantitative commentary...")
 	try:
 		with open(sum_dir / "llm_quant.txt", "w", encoding="utf-8") as quant_file:
 			quant_commentary = generate_quant_commentary(
@@ -1117,7 +1120,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			errors.append(f"Quant Commentary Failed: {e}")
 			quant_commentary = None
 
-	print(f"\n  [Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
+	logger.info(f"[Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
 
 	return {
 		"factor_results":   factor_results,

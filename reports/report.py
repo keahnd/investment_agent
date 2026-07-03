@@ -15,9 +15,12 @@ Sections:
   8. Commentary
 """
 
+import logging
 from fpdf import FPDF
 from pathlib import Path
 from datetime import date
+
+logger = logging.getLogger("investment_agent")
 
 
 # ── Page layout constants ─────────────────────────────────────────
@@ -982,33 +985,33 @@ def generate_report(final_state: dict, report_dir, charts_dir=None, divergence_d
 
     run_date    = final_state.get("run_date", str(date.today()))
 
-    print(f"\n  [Report] Building PDF report for {final_state.get('user_name')}...")
+    logger.info(f"[Report] Building PDF report for {final_state.get('user_name')}...")
 
     pdf = PortfolioReport()
 
     _section_cover(pdf, final_state)
-    print(f"    [ok] Cover page")
+    logger.info("  [ok] Cover page")
 
     _section_portfolio_snapshot(pdf, final_state)
-    print(f"    [ok] Portfolio snapshot")
-    
+    logger.info("  [ok] Portfolio snapshot")
+
     _section_advisory_commentary(pdf, final_state)
-    print(f"    [ok] Commentary")
-    
+    logger.info("  [ok] Commentary")
+
     _section_recommendation_table(pdf, final_state)
-    print(f"    [ok] Recommendation table")
-    
+    logger.info("  [ok] Recommendation table")
+
     _section_simulation_charts(pdf, final_state, charts_dir)
-    print(f"    [ok] Simulation charts")
-    
+    logger.info("  [ok] Simulation charts")
+
     _section_virtual_portfolio(pdf, divergence_data)
-    print(f"    [ok] Virtual portfolio")
+    logger.info("  [ok] Virtual portfolio")
 
     _section_model_outputs(pdf, final_state, charts_dir)
-    print(f"    [ok] Model outputs")
+    logger.info("  [ok] Model outputs")
 
     pdf_path = report_dir / f"report_{final_state['user_name']}_{run_date}.pdf"
     pdf.output(str(pdf_path))
-    print(f"  [Report] Saved to {pdf_path}")
+    logger.info(f"[Report] Saved to {pdf_path}")
 
     return str(pdf_path)

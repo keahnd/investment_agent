@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import logging
 import pandas as pd
 import numpy as np
 import cvxpy as cp
@@ -10,6 +11,8 @@ from pypfopt import HRPOpt, objective_functions
 
 from agents.state import PipelineState
 from agents.llm import get_llm
+
+logger = logging.getLogger("investment_agent")
 
 UNCERTAINTY_SCALE = 0.05   # from config — tune this over time
 
@@ -390,13 +393,40 @@ def value_rebalancing(
 			"quality_metrics":  fh,
 		})
 
-	return rank_and_rebalance(
+	header = f"  {'Ticker':<8} {'Score':>7}  {'Action':<6}  {'Signal':<12}  {'PE%':>5}  {'View%':>6}  {'Margin':>7}  {'Beats':>5}"
+	logger.debug(f"[Value Rebalancing] Composite scores:\n{header}")
+	for ta in ticker_analyses:
+		v    = ta["valuation_result"]
+		fh_  = ta["quality_metrics"]
+		bl_  = ta["bl_view"]
+		pe_pct   = v.get("pe_vs_history_pctile")
+		margin   = fh_.get("gross_margin")
+		beats_ed = (earnings_data.get(ta["ticker"]) or {}).get("consecutive_beats")
+		row = (
+			f"  {ta['ticker']:<8} {ta['composite_score']:>+7.3f}  {ta['action']:<6}  "
+			f"{str(v.get('valuation_signal', 'N/A')):<12}  "
+			f"{f'{pe_pct:.0f}' if pe_pct is not None else 'N/A':>5}  "
+			f"{bl_.get('view_return_delta', 0):>+6.1%}  "
+			f"{f'{margin:.1%}' if margin is not None else 'N/A':>7}  "
+			f"{beats_ed if beats_ed is not None else 'N/A':>5}"
+		)
+		logger.debug(row)
+
+	new_weights = rank_and_rebalance(
 		ticker_analyses = ticker_analyses,
 		current_weights = current_weights,
 		max_position    = 0.25,
 		min_position    = 0.02,
 		max_adjust      = 0.05,
 	)
+
+	wt_header = f"  {'Ticker':<8} {'Old%':>6}  {'New%':>6}  {'Delta':>7}"
+	logger.debug(f"[Value Rebalancing] Weight changes:\n{wt_header}")
+	for t, new_w in new_weights.items():
+		old_w = current_weights.get(t, 0.0)
+		logger.debug(f"  {t:<8} {old_w:>6.1%}  {new_w:>6.1%}  {new_w - old_w:>+7.1%}")
+
+	return new_weights
 
 
 def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
@@ -463,7 +493,7 @@ def run_robust_mean_variance(posterior_mu, posterior_cov, tickers, constraints):
         return {t: round(float(raw_weights[i]), 6) for i, t in enumerate(tickers)}, None
         
     except Exception as e:
-        print(f"    [warn] Robust MV failed: {e}")
+        logger.warning(f"Robust MV failed: {e}")
         return None, str(e)
 
 
@@ -732,7 +762,7 @@ def _parse_views(raw: str, tickers: list[str]) -> dict:
     try:
         views = json.loads(raw)
     except json.JSONDecodeError as e:
-        print(f"    [warn] LLM returned invalid JSON: {e}")
+        logger.warning(f"LLM returned invalid JSON: {e}")
         return {ticker: _neutral() for ticker in tickers}
 
     for ticker in tickers:
@@ -792,7 +822,7 @@ def generate_sentiment_views(
         raw = response.content.strip()
         return _parse_views(raw, tickers)
     except Exception as e:
-        print(f"    [warn] LLM call failed: {e}")
+        logger.warning(f"LLM BL views call failed: {e}")
         return _parse_views("", tickers)
 
 
@@ -802,7 +832,7 @@ def agent3_advisor(state: PipelineState) -> dict:
     Generates Black-Litterman views, runs optimisation,
     produces recommendation table and advisory commentary.
     """
-    print(f"  [Agent 3] Advisor running")
+    logger.info("[Agent 3] Advisor running")
     
     user_name = state["user_name"]
     user_path = Path(state["user_path"])
@@ -877,7 +907,7 @@ def agent3_advisor(state: PipelineState) -> dict:
         constraints         = constraints,
     )
     
-    print(f"\n  [Agent 3] Complete. New Errors: {len(errors) - existing_errors}")
+    logger.info(f"[Agent 3] Complete. New Errors: {len(errors) - existing_errors}")
 
     return {
         "bl_views": bl_views,

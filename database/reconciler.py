@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, date
 from database.schema import init_database, insert_portfolio_row, insert_model_output, insert_recommendation, insert_virtual_portfolio
 import requests, zipfile, io
@@ -8,6 +9,8 @@ import pandas as pd
 import yfinance as yf
 
 from agents.agent2_quant import fetch_prices, _to_yfinance_ticker
+
+logger = logging.getLogger("investment_agent")
 
 
 def _fetch_opening_prices(tickers, start):
@@ -43,7 +46,7 @@ def _fetch_opening_prices(tickers, start):
             opening_prices = data.apply(lambda col: col.dropna().iloc[0] if not col.dropna().empty else None)
             missing = [t for t, p in opening_prices.items() if p is None or (hasattr(p, '__float__') and pd.isna(p))]
             if missing:
-                print(f"  [WARN] No opening price found for {missing}, extending start by 1 days...")
+                logger.warning(f"No opening price found for {missing}, extending start by 1 days...")
                 start = start - timedelta(days=1)
                 # This could result in grabbing opening prices BEFORE the recommendation ran. Giving the
                 # VP false price values to work off of.
@@ -54,7 +57,7 @@ def _fetch_opening_prices(tickers, start):
 
         except Exception as e:
             if attempt < 4:
-                print(f"  [WARN] Download failed ({e}). Retrying in {wait}s...")
+                logger.warning(f"Download failed ({e}). Retrying in {wait}s...")
                 time.sleep(wait)
             else:
                 raise RuntimeError(f"Failed to download opening price data after 5 attempts: {e}")
@@ -138,11 +141,11 @@ def _build_virtual_portfolio(last_rec, opening_vp_value, opening_prices):
     for ticker, weight, strategy in last_rec:
         price = opening_prices.get(ticker) if hasattr(opening_prices, "get") else opening_prices[ticker]
         if price is None or (isinstance(price, float) and (math.isnan(price) or price == 0.0)):
-            print(f"  [WARN] {ticker}: invalid opening price ({price}) — skipping from VP build.")
+            logger.warning(f"{ticker}: invalid opening price ({price}) — skipping from VP build.")
             continue
         total_w = sum(weights_by_strategy[strategy].values())
         if total_w == 0:
-            print(f"  [WARN] {strategy}: all weights are zero — skipping VP build for this strategy.")
+            logger.warning(f"{strategy}: all weights are zero — skipping VP build for this strategy.")
             continue
         normalised_weight = weight / total_w
         market_value = opening_vp_value.get(strategy, 0.0) * normalised_weight

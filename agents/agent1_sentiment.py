@@ -21,6 +21,7 @@ Summaries are written to users/{name}/data/summaries/.
 
 import os
 import json
+import logging
 import time
 import re
 from datetime import date, datetime, timedelta
@@ -34,6 +35,8 @@ from youtube_transcript_api import YouTubeTranscriptApi
 
 from agents.state import PipelineState
 from agents.llm import get_llm
+
+logger = logging.getLogger("investment_agent")
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -77,14 +80,14 @@ def scrape_finviz(ticker: str) -> list[dict]:
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
     except Exception as e:
-        print(f"    [warn] Finviz request failed for {ticker}: {e}")
+        logger.warning(f"Finviz request failed for {ticker}: {e}")
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
     news_table = soup.find(id="news-table")
 
     if not news_table:
-        print(f"    [warn] Finviz news table not found for {ticker}")
+        logger.warning(f"Finviz news table not found for {ticker}")
         return []
 
     results = []
@@ -151,7 +154,7 @@ def scrape_seeking_alpha(ticker: str) -> list[dict]:
         )
         data = response.json()
     except Exception as e:
-        print(f"    [warn] Seeking Alpha fetch failed for {ticker}: {e}")
+        logger.warning(f"Seeking Alpha fetch failed for {ticker}: {e}")
         return []
 
     results = []
@@ -213,7 +216,7 @@ def fetch_aaii_sentiment() -> dict:
         }
 
     except Exception as e:
-        print(f"    [warn] AAII sentiment fetch failed: {e}")
+        logger.warning(f"AAII sentiment fetch failed: {e}")
         return {"error": str(e)}
 
 
@@ -238,7 +241,7 @@ def fetch_fear_greed() -> dict:
         }
 
     except Exception as e:
-        print(f"    [warn] Fear & Greed fetch failed: {e}")
+        logger.warning(f"Fear & Greed fetch failed: {e}")
         return {"score": None, "rating": "unknown", "error": str(e)}
 
 
@@ -264,7 +267,7 @@ def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
         # Step 1: fetch channel page to find channel ID
         page = requests.get(base_url, headers=HEADERS, timeout=10)
         if page.status_code == 404:
-            print(f"    [warn] Channel not found (404): {base_url} — check the handle in config.json")
+            logger.warning(f"Channel not found (404): {base_url} — check the handle in config.json")
             return []
 
         # Step 2: extract channel ID from the page HTML
@@ -280,11 +283,11 @@ def _resolve_channel_video_urls(channel_url: str, n: int = 3) -> list[str]:
         # Step 3: fallback — regex on the raw page JSON
         video_ids = list(dict.fromkeys(re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', page.text)))
         if not video_ids:
-            print(f"    [warn] No videos found for {base_url} (status {page.status_code}) — handle may be wrong")
+            logger.warning(f"No videos found for {base_url} (status {page.status_code}) — handle may be wrong")
         return [f"https://www.youtube.com/watch?v={vid}" for vid in video_ids[:n]]
 
     except Exception as e:
-        print(f"    [warn] Could not resolve videos from {channel_url}: {e}")
+        logger.warning(f"Could not resolve videos from {channel_url}: {e}")
     return []
 
 
@@ -305,7 +308,7 @@ def fetch_youtube_transcript(url: str, name: str) -> str:
     # Extract video ID — handles both youtube.com/watch?v= and youtu.be/ formats
     match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
     if not match:
-        print(f"    [warn] Could not extract video ID from: {url}")
+        logger.warning(f"Could not extract video ID from: {url}")
         return ""
 
     video_id = match.group(1)
@@ -313,11 +316,11 @@ def fetch_youtube_transcript(url: str, name: str) -> str:
     try:
         transcript = YouTubeTranscriptApi().fetch(video_id)
         full_text = " ".join(segment.text for segment in transcript)
-        print(f"    [ok]   Transcript fetched for {name} ({len(full_text):,} chars)")
+        logger.info(f"Transcript fetched for {name} ({len(full_text):,} chars)")
         return full_text
 
     except Exception as e:
-        print(f"    [warn] Transcript fetch failed for {name}: {e}")
+        logger.warning(f"Transcript fetch failed for {name}: {e}")
         return ""
     
 
@@ -362,7 +365,7 @@ def scrape_yahoo_finance(ticker: str) -> list[dict]:
         return results
         
     except Exception as e:
-        print(f"    [warn] Yahoo Finance fetch failed for {ticker}: {e}")
+        logger.warning(f"Yahoo Finance fetch failed for {ticker}: {e}")
         return []
 
 
@@ -385,7 +388,7 @@ def scrape_etf_dot_com(ticker: str) -> list[dict]:
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
     except Exception as e:
-        print(f"    [warn] etf.com request failed for {ticker}: {e}")
+        logger.warning(f"etf.com request failed for {ticker}: {e}")
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -433,7 +436,7 @@ def scrape_globe_and_mail(ticker: str) -> list[dict]:
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
     except Exception as e:
-        print(f"    [warn] Globe and Mail request failed for {ticker}: {e}")
+        logger.warning(f"Globe and Mail request failed for {ticker}: {e}")
         return []
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -539,7 +542,7 @@ def filter_relevant_headlines(ticker: str, company_name: str, articles: list[dic
         indices = [int(x.strip()) for x in response.split(",") if x.strip().isdigit()]
         return [articles[i] for i in indices if i < len(articles)]
     except Exception as e:
-        print(f"    [warn] Headline filter failed for {ticker}: {e}")
+        logger.warning(f"Headline filter failed for {ticker}: {e}")
         return articles[:n]
     
     
@@ -581,7 +584,7 @@ def mention_is_relevant(ticker: str, mentions: list[str], company_name: str = ""
         # print(f"Only {len(indices)} were relevant.")
         return [mentions[i] for i in indices if i < len(mentions)]
     except Exception as e:
-        print(f"    [warn] Podcast relevance filter failed for {ticker}: {e}")
+        logger.warning(f"Podcast relevance filter failed for {ticker}: {e}")
         return mentions
     
 
@@ -728,7 +731,7 @@ def summarise_ticker_text(ticker: str, text: str) -> str:
         response = llm.invoke(prompt)
         return response.content.strip()
     except Exception as e:
-        print(f"    [warn] LLM summarisation failed for {ticker}: {e}")
+        logger.warning(f"LLM summarisation failed for {ticker}: {e}")
         return f"Summarisation unavailable for {ticker} this week. Raw data collected."
 
 
@@ -760,7 +763,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
     run_date  = state["run_date"]
     errors    = list(state.get("errors") or [])
 
-    print(f"\n  [Agent 1] Sentiment Analysis running for {user_name}")
+    logger.info(f"[Agent 1] Sentiment Analysis running for {user_name}")
 
     # Create output directories
     raw_dir     = user_path / "data" / run_date / "raw"
@@ -803,7 +806,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
         # ticker is the yfinance symbol (e.g. "TD.TO", "AAPL")
         # base_ticker strips .TO for scrapers, file paths, and transcript search
         base_ticker = ticker.removesuffix(".TO")
-        print(f"\n    Scraping {ticker}...")
+        logger.info(f"  Scraping {ticker}...")
         meta   = ticker_meta.get(base_ticker, {"exchange": "", "is_etf": False, "is_tsx": False})
         is_tsx = meta["is_tsx"]
         is_etf = meta["is_etf"]
@@ -823,7 +826,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 )
                 write_raw(raw_dir, base_ticker, "globeandmail", gm_text)
                 ticker_text[ticker].append(f"=== Globe and Mail Articles ===\n{gm_text}")
-                print(f"    [ok]   Globe and Mail: {len(gm_results)} relevant articles")
+                logger.info(f"  Globe and Mail: {len(gm_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: Globe and Mail returned no results")
             time.sleep(GENERAL_DELAY)
@@ -843,7 +846,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 )
                 write_raw(raw_dir, base_ticker, "etf_dot_com", etf_text)
                 ticker_text[ticker].append(f"=== ETF.com ===\n{etf_text}")
-                print(f"    [ok]   etf.com: {len(etf_results)} relevant articles")
+                logger.info(f"  etf.com: {len(etf_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: etf.com returned no results")
             time.sleep(GENERAL_DELAY)
@@ -862,7 +865,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 )
                 write_raw(raw_dir, base_ticker, "finviz", finviz_text)
                 ticker_text[ticker].append(f"=== Finviz Articles ===\n{finviz_text}")
-                print(f"    [ok]   Finviz: {len(finviz_results)} relevant articles")
+                logger.info(f"  Finviz: {len(finviz_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: Finviz returned no results")
             time.sleep(FINVIZ_DELAY)
@@ -876,7 +879,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 )
                 write_raw(raw_dir, base_ticker, "seekingalpha", sa_text)
                 ticker_text[ticker].append(f"=== Seeking Alpha Headlines ===\n{sa_text}")
-                print(f"    [ok]   Seeking Alpha: {len(sa_results)} headlines")
+                logger.info(f"  Seeking Alpha: {len(sa_results)} headlines")
             else:
                 errors.append(f"{ticker}: Seeking Alpha returned no results")
             time.sleep(SEEKALPHA_DELAY)
@@ -894,40 +897,40 @@ def agent1_sentiment(state: PipelineState) -> dict:
             )
             write_raw(raw_dir, base_ticker, "yahoofinance", yf_text)
             ticker_text[ticker].append(f"=== Yahoo Finance Articles ===\n{yf_text}")
-            print(f"    [ok]   Yahoo Finance ({ticker}): {len(yf_results)} relevant articles")
+            logger.info(f"  Yahoo Finance ({ticker}): {len(yf_results)} relevant articles")
         else:
             errors.append(f"{ticker}: Yahoo Finance returned no results")
 
         # break # For testing
 
     # ── Macro signals (portfolio-level, not per-ticker) ───────────────────────
-    print(f"\n    Fetching macro signals...")
+    logger.info("  Fetching macro signals...")
 
     # --- Market Sentiment ---
     aaii = fetch_aaii_sentiment()
     write_raw(raw_dir, "MARKET", "aaii", json.dumps(aaii, indent=2))
     if "error" not in aaii:
-        print(f"    [ok]   AAII: bullish={aaii.get('bullish')} bearish={aaii.get('bearish')}")
+        logger.info(f"  AAII: bullish={aaii.get('bullish')} bearish={aaii.get('bearish')}")
     else:
         errors.append(f"AAII fetch failed: {aaii.get('error')}")
 
     fg = fetch_fear_greed()
     write_raw(raw_dir, "MARKET", "fear_greed", json.dumps(fg, indent=2))
     if "error" not in fg:
-        print(f"    [ok]   Fear & Greed: {fg.get('score')} ({fg.get('rating')})")
+        logger.info(f"  Fear & Greed: {fg.get('score')} ({fg.get('rating')})")
     else:
         errors.append(f"Fear & Greed fetch failed: {fg.get('error')}")
 
     # ── Podcast transcripts ───────────────────────────────────────────────────
     if podcast_sources:
-        print(f"\n    Fetching {len(podcast_sources)} podcast transcript(s)...")
+        logger.info(f"  Fetching {len(podcast_sources)} podcast transcript(s)...")
 
     for podcast in podcast_sources:
         url = podcast["url"]
         if "/@" in url or "/channel/" in url:
             video_urls = _resolve_channel_video_urls(url, n=5)
             if not video_urls:
-                print(f"    [warn] No videos resolved for {podcast['name']} — skipping")
+                logger.warning(f"No videos resolved for {podcast['name']} — skipping")
                 continue
         else:
             video_urls = [url]
@@ -946,7 +949,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                         label = f"=== Podcast: {podcast['name']} (credibility: {podcast.get('credibility', 'medium')}) ==="
                         ticker_text[ticker].append(f"{label}\n{mentions}")
                         podcast_raw_sections.append(f"[{ticker}]\n{mentions}")
-                        print(f"    [ok]   Found {ticker} mentions in {podcast['name']}")
+                        logger.info(f"  Found {ticker} mentions in {podcast['name']}")
 
                 if podcast_raw_sections:
                     write_raw(raw_dir, "PODCAST", podcast["name"], "\n\n".join(podcast_raw_sections))
@@ -954,7 +957,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
         time.sleep(GENERAL_DELAY)
 
     # ── LLM summarisation ─────────────────────────────────────────────────────
-    print(f"\n    Summarising collected text via LLM...")
+    logger.info("  Summarising collected text via LLM...")
     summaries = {}
     raw_text_out = {}
 
@@ -967,9 +970,9 @@ def agent1_sentiment(state: PipelineState) -> dict:
         summary = summarise_ticker_text(ticker, combined)
         summaries[ticker] = summary
         write_summary(summary_dir, ticker.removesuffix(".TO"), summary)
-        print(f"    [ok]   {ticker}: summary written ({len(summary)} chars)")
+        logger.info(f"  {ticker}: summary written ({len(summary)} chars)")
 
-    print(f"\n  [Agent 1] Complete. Errors: {len(errors)}")
+    logger.info(f"[Agent 1] Complete. Errors: {len(errors)}")
 
     return {
         "raw_text":       raw_text_out,

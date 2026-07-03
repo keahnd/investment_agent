@@ -39,7 +39,7 @@ _YF_SECTOR_MAP = {
 	"Financial Services": "Financials",
 }
 
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger("investment_agent")
 
 # ═════════════════════════════════════════════════════════════════════════════
 # UPDATED compute_valuation_signal  (replaces Fix 1 from previous session)
@@ -157,7 +157,7 @@ def _fetch_historical_values(ticker: str, years: int = 3) -> dict:
 		return (hist_pe, hist_peg, sector)
 
 	except Exception as e:
-		print(f"Historical fetch failed for {ticker}: {e}")
+		logger.warning(f"Historical fetch failed for {ticker}: {e}")
 		return (_empty_pe_range(), _empty_peg_range(), None)
 
 
@@ -465,7 +465,7 @@ def _fetch_historical_peg_range(earnings: Optional[pd.DataFrame], hist_prices: p
 		}
 
 	except Exception as e:
-		print(f"Historical PEG fetch failed for {e}")
+		logger.warning(f"Historical PEG fetch failed: {e}")
 		return _empty_peg_range()
 	
 def _empty_peg_range() -> dict:
@@ -492,7 +492,7 @@ def fetch_etf_holdings(etf_ticker: str, top_n: int = 20) -> list[str]:
             return tickers
             
     except Exception as e:
-        print(f"ETF holdings fetch failed for {etf_ticker}: {e}")
+        logger.warning(f"ETF holdings fetch failed for {etf_ticker}: {e}")
     
     return []
 
@@ -535,7 +535,7 @@ def _load_sector_pe_cache(sector: str, db_path: str, ttl_days: int = 7) -> dict 
 			"peg":       json.loads(row[3]) if row[3] else None,
 		}
 	except Exception as e:
-		print(f"Sector PE cache read failed: {e}")
+		logger.warning(f"Sector PE cache read failed: {e}")
 		return None
 
 
@@ -556,7 +556,7 @@ def _save_sector_pe_cache(sector: str, result: dict, db_path: str) -> None:
 		conn.commit()
 		conn.close()
 	except Exception as e:
-		print(f"Sector PE cache write failed: {e}")
+		logger.warning(f"Sector PE cache write failed: {e}")
 
 
 def fetch_sector_metrics_from_peers(
@@ -572,7 +572,7 @@ def fetch_sector_metrics_from_peers(
 	"""
 	cached = _load_sector_pe_cache(sector, db_path)
 	if cached:
-		print(f"[Sector PE Cache] Hit for {sector}")
+		logger.debug(f"Sector PE Cache: hit for {sector}")
 		return cached
 
 	if sector in EV_EBITDA_UNRELIABLE_SECTORS:
@@ -611,7 +611,7 @@ def fetch_sector_metrics_from_peers(
 			time.sleep(0.15)
 
 		except Exception as e:
-			print(f"Peer fetch failed for {ticker}: {e}")
+			logger.warning(f"Peer fetch failed for {ticker}: {e}")
 			continue
 
 	def _stats(vals):
