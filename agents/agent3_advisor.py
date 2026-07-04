@@ -673,9 +673,11 @@ and the macro economic data of the shiller cape value, the aaii sentiment (weekl
 
 Data:
 Macro context:
-  CAPE: 
+  CAPE:
   Fear & Greed:
   AAII Sentiment:
+  Forward Factor Premia (market-level, blended):
+    Market ERP: | SMB: | HML: | RMW: | CMA: | MOM:
 
 Company context:
   Sector:
@@ -685,6 +687,8 @@ Company context:
   Sentiment summary: summary
 
   Quantitative signals: Valuation data, financial health data and earnings data
+  Factor Betas: MKT= | SMB= | HML= | RMW= | CMA= | MOM=
+  Earnings Yield (1/fwdPE + growth):
 
   Earnings proximity:  Next earnings
     Note: if earnings are within 7 days, reduce confidence by 1 and explicitly indicate earnings are upcoming.
@@ -780,11 +784,13 @@ def generate_sentiment_views(
         summaries: dict,
         earnings_dates: dict,
         valuations: dict,
-        financial_health: dict, 
+        financial_health: dict,
         earnings_data: dict,
         aaii_sentiment: dict,
         fear_greed: dict,
         cape: float,
+        forward_mu_factors: dict | None = None,
+        factor_results: dict | None = None,
         file = None,
     ) -> dict:
     """
@@ -793,10 +799,17 @@ def generate_sentiment_views(
     """
     data_lines = []
 
+    fmp = forward_mu_factors or {}
+    fr_all = factor_results or {}
+
+    def _pct(v):
+        return f"{v:.2%}" if v is not None else "N/A"
+
     data_lines.append(f"""Market Data:
         Fear/Greed: {fear_greed}
         aaii_sentiment: {aaii_sentiment}
-        Shiller Cape: {cape}""")
+        Shiller Cape: {cape}
+        Forward Factor Premia: ERP={_pct(fmp.get('mkt'))} | SMB={_pct(fmp.get('smb'))} | HML={_pct(fmp.get('hml'))} | RMW={_pct(fmp.get('rmw'))} | CMA={_pct(fmp.get('cma'))} | MOM={_pct(fmp.get('mom'))}""")
 
     for ticker in tickers:
         sent          = summaries.get(ticker, {})
@@ -804,13 +817,17 @@ def generate_sentiment_views(
         valuation     = valuations.get(ticker, {})
         finances      = financial_health.get(ticker, {})
         earnings      = earnings_data.get(ticker, {})
+        fr            = fr_all.get(ticker, {})
+        ey            = valuation.get("earnings_yield")
 
         data_lines.append(f"""Ticker = {ticker}:
         News Summary: {sent}, \
         Next Earnings Date: {earnings_date}
         Valuation Data: {valuation}
         Financial Data: {finances}
-        Earnings Data: {earnings}""")
+        Earnings Data: {earnings}
+        Factor Betas: MKT={fr.get('b_MKT', 'N/A')} | SMB={fr.get('b_SMB', 'N/A')} | HML={fr.get('b_HML', 'N/A')} | RMW={fr.get('b_RMW', 'N/A')} | CMA={fr.get('b_CMA', 'N/A')} | MOM={fr.get('b_MOM', 'N/A')}
+        Earnings Yield: {_pct(ey)}""")
 
     prompt = SENTIMENT_PROMPT.format(
         data="\n".join(data_lines),
@@ -848,7 +865,9 @@ def agent3_advisor(state: PipelineState) -> dict:
     
     bl_views = generate_sentiment_views(tickers, state["summaries"], state["earnings_dates"],
                     state["valuation"], state["financial_health"], state["earnings_data"],
-                    state["aaii_sentiment"], state["fear_greed"], state["cape"])
+                    state["aaii_sentiment"], state["fear_greed"], state["cape"],
+                    forward_mu_factors=state.get("forward_mu_factors"),
+                    factor_results=state.get("factor_results"))
     
     views = {
         ticker: prior_mu[i] + bl_views[ticker]["view_return"]

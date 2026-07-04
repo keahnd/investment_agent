@@ -288,7 +288,7 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 		file: Optional file object to redirect printed diagnostics. Defaults to stdout.
 
 	Returns:
-		Dict with keys: log_ret, log_ret_series, excess_ret, MKT, SMB, HML, RMA, CMA, MOM
+		Dict with keys: log_ret, log_ret_series, excess_ret, MKT, SMB, HML, RMW, CMA, MOM
 		factor_vols, prices, S0, T_hist, rf_daily, rf_ann.
 	"""
 	price_series = raw[ticker].dropna()
@@ -341,6 +341,135 @@ def compute_returns(raw: pd.DataFrame, ticker: str, today: date, start: date, ff
 		"rf_daily": rf_daily,
 		"rf_ann": rf_ann,
 	}
+	
+
+def current_factor_spread():
+	"""
+	Fetches live ETF valuation data to compute forward-looking factor spread adjustments.
+
+	Uses four ETFs as factor proxies — IWM (small cap), SPY (large cap), IVE (value),
+	IVW (growth) — to estimate how far current market valuations deviate from long-run
+	historical norms. Returns spread adjustments that nudge the historical factor means
+	toward implied forward premiums.
+
+	SMB adjustment: based on IWM/SPY trailing P/E ratio vs historical ~0.85 anchor.
+					Small caps cheap → positive adjustment; expensive → negative.
+	SMB implied:	IWM implied return minus SPY implied return, where each implied
+					return = (1/forwardPE) + earningsGrowth. Positive when small caps
+					offer higher forward earnings yield + growth than large caps.
+	HML adjustment: based on IVW/IVE price-to-book ratio vs historical ~3.80 anchor.
+					Growth expensive vs value → positive HML adjustment (mean reversion).
+	HML implied:	IVE implied return minus IVW implied return, same earnings yield +
+					growth formula. Positive when value stocks offer better forward
+					return than growth; negative when growth stocks dominate.
+
+	Returns:
+		Dict with keys: smb_spread_adjustment, smb_implied, hml_spread_adjustment, hml_implied.
+		Adjustment values are capped at ±1.5% (SMB) and ±2% (HML). None if P/E or P/B
+		data is unavailable from yfinance.
+	"""
+	# ── Live ETF valuation data from yfinance ─────────────────────────────────
+	tickers = {"IWM": None, "SPY": None, "IVE": None, "IVW": None}
+
+	for ticker in tickers:
+		try:
+			info = yf.Ticker(ticker).info
+			tickers[ticker] = info
+		except Exception as e:
+			logger.warning(f"yfinance fetch failed for {ticker}: {e}")
+			tickers[ticker] = {}
+
+	# ── SMB spread: IWM/SPY trailing P/E ─────────────────────────────────────
+	try:
+		iwm_implied     = (1 / tickers["IWM"]["forwardPE"]) + tickers["IWM"]["earningsGrowth"]
+		spy_implied     = (1 / tickers["SPY"]["forwardPE"]) + tickers["SPY"]["earningsGrowth"]
+		lambda_smb_implied = iwm_implied - spy_implied
+	except Exception as e:
+		logger.warning(f"SMB implied return calculation failed ({e}) — will return None")
+		lambda_smb_implied = None
+
+	iwm_pe = tickers["IWM"].get("trailingPE")
+	spy_pe = tickers["SPY"].get("trailingPE")
+
+	smb_spread_adjustment = None
+	smb_spread_historic   = 0.85   # small caps historically trade at ~15% P/E discount
+
+	if iwm_pe and spy_pe and spy_pe > 0:
+		smb_spread_current = iwm_pe / spy_pe
+		spread_deviation   = (smb_spread_current - smb_spread_historic) / smb_spread_historic
+		smb_spread_adjustment = np.clip(-spread_deviation * 0.02, -0.015, 0.015)
+	else:
+		logger.warning("SMB spread: P/E data unavailable, using long-run anchor only")
+
+	# ── HML spread: IVE/IVW price-to-book ────────────────────────────────────
+	try:
+		ive_implied     = (1 / tickers["IVE"]["forwardPE"]) + tickers["IVE"]["earningsGrowth"]
+		ivw_implied     = (1 / tickers["IVW"]["forwardPE"]) + tickers["IVW"]["earningsGrowth"]
+		lambda_hml_implied = ive_implied - ivw_implied
+	except Exception as e:
+		logger.warning(f"HML implied return calculation failed ({e}) — will return None")
+		lambda_hml_implied = None
+
+	# P/B is the right metric here — HML is constructed from book-to-market
+	# ratios, so P/B directly measures what the factor is tracking
+	ive_pb = tickers["IVE"].get("priceToBook")
+	ivw_pb = tickers["IVW"].get("priceToBook")
+
+	hml_spread_adjustment = None
+	hml_spread_historic   = 3.80   # growth historically trades at ~3.8x value P/B
+
+	if ive_pb and ivw_pb and ive_pb > 0:
+		hml_spread_current = ivw_pb / ive_pb
+		spread_deviation   = (hml_spread_current - hml_spread_historic) / hml_spread_historic
+		hml_spread_adjustment = np.clip(spread_deviation * 0.02, -0.02, 0.02)
+	else:
+		logger.warning("HML spread: P/B data unavailable, using long-run anchor only")
+
+	return {
+		"smb_spread_adjustment": smb_spread_adjustment,
+		"smb_implied":           lambda_smb_implied,
+		"hml_spread_adjustment": hml_spread_adjustment,
+		"hml_implied":           lambda_hml_implied,
+	}
+
+
+def fetch_damodaran_erp() -> float | None:
+	"""
+	Fetches Aswath Damodaran's implied equity risk premium from NYU Stern.
+
+	Downloads the monthly ERP Excel file from Damodaran's public data page and
+	reads the most recent "Implied Premium (FCFE)" value from the Historical ERP
+	sheet. This is a bottom-up, market-implied ERP derived from discounted cash
+	flow models across the S&P 500, updated monthly.
+
+	Returns:
+		Latest implied ERP as a decimal (e.g. 0.045 for 4.5%), or None if the
+		download or parse fails. Callers should handle None as a fallback signal.
+	"""
+	url = "https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx"
+	
+	try:
+		response = requests.get(url, timeout=30)
+		response.raise_for_status()
+		
+		xl = pd.read_excel(
+			io.BytesIO(response.content),
+			sheet_name="Historical ERP"
+		)
+		
+		# The ERP column is called "Implied Premium (FCFE)"
+		# Drop rows where the date or ERP is missing
+		xl = xl.dropna(subset=["Month", "Implied Premium (FCFE)"])
+		
+		# Most recent row is the latest monthly estimate
+		latest_erp = float(xl["Implied Premium (FCFE)"].iloc[-1])
+		logger.debug(f"Got Damodaran ERP from Month of: {xl['Month'].iloc[-1]}")
+		
+		return latest_erp
+	
+	except Exception as e:
+		logger.error("Failed to get Damodaran ERP")
+		return None  # caller handles fallback
 
 
 def get_forward_mu_factors(
@@ -350,36 +479,110 @@ def get_forward_mu_factors(
 		file: io.IOBase | None = None
 	) -> dict:
 	"""
-	Finds/Calculates the forward factor
-	
+	Computes a forward-looking equity risk premium and packages it with the
+	historical factor means for use in mu estimation.
+
+	Blends three ERP signals into a single market premium estimate:
+	  1. CAPE ERP    — earnings yield (1/CAPE) minus the 10yr TIPS real yield.
+	  2. Historical  — 5-year realised MKT factor mean from the factor regression.
+	  3. Damodaran   — implied FCFE ERP from NYU Stern (fetched live, monthly).
+
+	The CAPE and historical ERPs are blended first (60/40 by default), then
+	averaged equally with the Damodaran ERP if available. The remaining factor
+	means (SMB, HML, RMW, CMA, MOM) pass through unchanged from the regression.
+
+	Args:
+		factor_means: Array of annualised factor means [MKT, SMB, HML, RMW, CMA, MOM].
+		cape:         Shiller CAPE ratio.
+		rf_10:        10-year TIPS real yield as a decimal.
+		file:         Optional file object for writing the ERP breakdown summary.
+
+	Returns:
+		Dict with keys mkt, smb, hml, rmw, cma, mom — all as annualised decimals.
 	"""
 	historical_erp = factor_means[0]
 	cape_weight = 0.6           # TUNABLE PARAM
 	cape_erp = max(0.0, (1 / cape) - rf_10)
 	blended_erp = cape_weight * cape_erp + (1 - cape_weight) * historical_erp
 
-	print(f"\n10-year Real risk-free (TIPS): {rf_10:.2%}", file=file)
-	print(f"  CAPE earnings yield (1/CAPE) : {1/cape:.2%}", file=file)
-	print(f"  CAPE ERP                     : {cape_erp:.2%}", file=file)
-	print(f"  Historical ERP (5yr MKT avg) : {historical_erp:.2%}", file=file)
-	print(f"  Blended ERP (w={cape_weight:.0%} CAPE)   : {blended_erp:.2%}", file=file)
+	damodaran_erp = fetch_damodaran_erp()
+	erp = (blended_erp + damodaran_erp) / 2 if damodaran_erp is not None else blended_erp
+
+	try:
+		forward_factor_premia = current_factor_spread()
+	except Exception as e:
+		logger.warning(f"Factor spread fetch failed ({e}) — falling back to historical means for SMB and HML")
+		forward_factor_premia = None
+
+	smb_hist = factor_means[1]
+	hml_hist = factor_means[2]
+
+	if (forward_factor_premia is not None
+			and forward_factor_premia["smb_spread_adjustment"] is not None
+			and forward_factor_premia["smb_implied"] is not None):
+		smb = 0.50 * smb_hist + 0.25 * (smb_hist + forward_factor_premia["smb_spread_adjustment"]) + 0.25 * forward_factor_premia["smb_implied"]
+	else:
+		smb = smb_hist
+		if forward_factor_premia is not None:
+			logger.warning("SMB forward data incomplete — using historical mean only")
+
+	if (forward_factor_premia is not None
+			and forward_factor_premia["hml_spread_adjustment"] is not None
+			and forward_factor_premia["hml_implied"] is not None):
+		hml = 0.35 * hml_hist + 0.30 * (hml_hist + forward_factor_premia["hml_spread_adjustment"]) + 0.35 * forward_factor_premia["hml_implied"]
+	else:
+		hml = hml_hist
+		if forward_factor_premia is not None:
+			logger.warning("HML forward data incomplete — using historical mean only")
+
+	_fp = forward_factor_premia or {}
+	_smb_implied_str = f'{_fp.get("smb_implied"):.2%}' if _fp.get("smb_implied") is not None else 'unavailable'
+	_smb_spread_str  = f'{(smb_hist + _fp.get("smb_spread_adjustment")):.2%}' if _fp.get("smb_spread_adjustment") is not None else 'unavailable'
+	_hml_implied_str = f'{_fp.get("hml_implied"):.2%}' if _fp.get("hml_implied") is not None else 'unavailable'
+	_hml_spread_str  = f'{(hml_hist + _fp.get("hml_spread_adjustment")):.2%}' if _fp.get("hml_spread_adjustment") is not None else 'unavailable'
+
+	print(f"\n10-year Real risk-free (TIPS)				: {rf_10:.2%}", file=file)
+	print(f"  CAPE earnings yield (1/CAPE) 				: {1/cape:.2%}", file=file)
+	print(f"  CAPE ERP                     				: {cape_erp:.2%}", file=file)
+	print(f"  Historical ERP (5yr MKT avg) 				: {historical_erp:.2%}", file=file)
+	print(f"  Blended ERP (w={cape_weight:.0%} CAPE)   	: {blended_erp:.2%}", file=file)
+	print(f"  Damodaran ERP                				: {f'{damodaran_erp:.2%}' if damodaran_erp is not None else 'unavailable'}", file=file)
+	print(f"  Historical SMB               				: {smb_hist:.2%}", file=file)
+	print(f"  Implied SMB                  				: {_smb_implied_str}", file=file)
+	print(f"  Spread Implied SMB           				: {_smb_spread_str}", file=file)
+	print(f"  Historical HML               				: {hml_hist:.2%}", file=file)
+	print(f"  Implied HML                  				: {_hml_implied_str}", file=file)
+	print(f"  Spread Implied HML           				: {_hml_spread_str}", file=file)
+	print(f"  Combined HML                			 	: {hml:.2%}", file=file)
 
 	return {
-		"mkt": blended_erp,
+		"mkt": erp,
+		"smb": smb,
+		"hml": hml,
+		"rmw": factor_means[3],
+		"cma": factor_means[4],
+		"mom": factor_means[5]
 	}
 
 
+def should_retain_alpha(alpha_daily, t_stat_alpha, p_val_alpha, r2):
+    statistically_significant = p_val_alpha < 0.05 and t_stat_alpha > 2.5
+    model_fits_well = r2 > 0.50
+    alpha_economically_meaningful = abs(alpha_daily * 252) > 0.01  # > 1% annualised
+    return statistically_significant and model_fits_well and alpha_economically_meaningful
+
+
 def run_factor_models(
-		excess_ret: np.ndarray, 
-		MKT: np.ndarray, 
-		SMB: np.ndarray, 
-		HML: np.ndarray, 
-		RMA: np.ndarray,
+		excess_ret: np.ndarray,
+		MKT: np.ndarray,
+		SMB: np.ndarray,
+		HML: np.ndarray,
+		RMW: np.ndarray,
 		CMA: np.ndarray,
 		MOM: np.ndarray,
-		rf_ann: float, 
-		cape: float, 
-		real_rf: tuple[float, float], 
+		rf_ann: float,
+		forward_mu_factors: dict,
+		real_rf: tuple[float, float],
 		file: io.IOBase | None = None) -> dict:
 	"""
 	Fits a Fama-French 3-factor OLS regression on daily excess returns.
@@ -393,7 +596,7 @@ def run_factor_models(
 		MKT: Daily Mkt-RF factor array.
 		SMB: Daily SMB factor array.
 		HML: Daily HML factor array.
-		RMA: Daily RMA factor array.
+		RMW: Daily RMW factor array.
 		CMA: Daily CMA factor array.
 		MOM: Daily MOM factor array.
 		rf_ann: Annualised risk-free rate (mean of daily RF * 252).
@@ -407,7 +610,7 @@ def run_factor_models(
 		residuals, r2, r2_adj, Y_hat, p_val_alpha, rf_ann.
 	"""
 	T_hist = len(excess_ret)
-	X = np.column_stack([np.ones(T_hist), MKT, SMB, HML, RMA, CMA, MOM])
+	X = np.column_stack([np.ones(T_hist), MKT, SMB, HML, RMW, CMA, MOM])
 	Y = excess_ret
 
 	XtX_inv = np.linalg.inv(X.T @ X)
@@ -437,30 +640,21 @@ def run_factor_models(
 	print(f"  Adj. R² = {R2_adj:.4f}", file=file)
 
 	alpha_daily = betas[0]
-	b_MKT, b_SMB, b_HML, b_RMA, b_CMA, b_MOM = betas[1], betas[2], betas[3], betas[4], betas[5], betas[6]
+	alpha_forward = alpha_daily * 252 if should_retain_alpha(alpha_daily, t_stats[0], p_vals[0], R2) else 0.0
 
-	factor_annual_means = np.array([
-		MKT.mean() * 252,
-		SMB.mean() * 252,
-		HML.mean() * 252,
-		RMA.mean() * 252, 
-		CMA.mean() * 252,
-		MOM.mean() * 252
-	])
+	b_MKT, b_SMB, b_HML, b_RMW, b_CMA, b_MOM = betas[1], betas[2], betas[3], betas[4], betas[5], betas[6]
 
-	rf_1, rf_10 = real_rf
+	rf_1, _ = real_rf
 	if rf_1:
 		rf_ann = rf_1
 
-	forward_mu_factors = get_forward_mu_factors(factor_annual_means, rf_10, cape, file)
-
 	mu_annual = (
 		rf_ann
-		+ alpha_daily * 252
+		+ alpha_forward * 252
 		+ b_MKT * forward_mu_factors["mkt"]
 		+ b_SMB * forward_mu_factors["smb"]
 		+ b_HML * forward_mu_factors["hml"]
-		+ b_RMA * forward_mu_factors["rma"],
+		+ b_RMW * forward_mu_factors["rmw"],
 		+ b_CMA * forward_mu_factors["cma"],
 		+ b_MOM * forward_mu_factors["mom"],
 	)
@@ -471,6 +665,10 @@ def run_factor_models(
 		"b_MKT": b_MKT,
 		"b_SMB": b_SMB,
 		"b_HML": b_HML,
+		"b_RMW": b_RMW,
+		"b_CMA": b_CMA,
+		"b_MOM": b_MOM,
+		"alpha_forward": alpha_forward,
 		"mu_annual": mu_annual,
 		"residuals": residuals,
 		"r2": R2,
@@ -595,6 +793,7 @@ def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
 				),
 				'earnings_growth': info.get('earningsGrowth'),
 				'revenue_growth': info.get('revenueGrowth'),
+				'earnings_yield': (1 / info.get('forwardPE')) + info.get('earningsGrowth'),
 				'200MA': info.get('twoHundredDayAverage'),
 				'50MA': info.get('fiftyDayAverage'),
 				'sector': info.get('sector'),
@@ -801,7 +1000,7 @@ def fetch_real_rf() -> tuple[float, float]:
 
 	  DGS1   — 1-year Treasury constant maturity yield (nominal, daily).
 	  DFII10 — 10-year TIPS real yield (inflation-adjusted, daily), used in
-	            the CAPE ERP formula so inflation does not need to be assumed separately.
+				the CAPE ERP formula so inflation does not need to be assumed separately.
 
 	Returns:
 		(rf_1yr, rf_10yr) both as decimals. Falls back to (0.04, 0.02) if
@@ -1000,13 +1199,16 @@ def generate_quant_commentary(
 
 		data_lines.append(f"""{ticker}:
 		Factor model: alpha={_fmt(fr.get('alpha_daily'), '.6f')}, \
-			b_mkt={_fmt(fr.get('b_MKT'), '.3f')}, R²={_fmt(fr.get('r2'), '.3f')}, \
-			p_val_alpha={_fmt(fr.get('p_val_alpha'), '.3f')}
+			b_mkt={_fmt(fr.get('b_MKT'), '.3f')}, b_smb={_fmt(fr.get('b_SMB'), '.3f')}, \
+			b_hml={_fmt(fr.get('b_HML'), '.3f')}, b_rmw={_fmt(fr.get('b_RMW'), '.3f')}, \
+			b_cma={_fmt(fr.get('b_CMA'), '.3f')}, b_mom={_fmt(fr.get('b_MOM'), '.3f')}, \
+			R²={_fmt(fr.get('r2'), '.3f')}, p_val_alpha={_fmt(fr.get('p_val_alpha'), '.3f')}
 		GARCH: persistence={_fmt(gr.get('garch_persist'), '.4f')}, \
 			sigma_annual={_fmt(gr.get('sigma_total_annual'), '.2%')}, \
 			vol_regime={gr.get('vol_regime', 'N/A')}
-		Valuation: fwd_pe={val.get('fwd_pe', 'N/A')}, \
-			peg={val.get('peg', 'N/A')}, ev_ebitda={val.get('ev_ebitda', 'N/A')}
+		Valuation: fwd_pe={val.get('fwd_pe', 'N/A')}, peg={val.get('peg', 'N/A')}, \
+			ev_ebitda={val.get('ev_ebitda', 'N/A')}, \
+			earnings_yield={_fmt(val.get('earnings_yield'), '.2%')}
 		Financial health: roic={_fmt(fh.get('roic'), '.4f')}, \
 			fcf_margin={_fmt(fh.get('fcf_margin'), '.2%')}, \
 			revenue_growth_1yr={_fmt(fh.get('revenue_growth_1yr'), '.2%')}, \
@@ -1114,6 +1316,26 @@ def agent2_quant(state: PipelineState) -> dict:
 	sum_dir = Path(state["user_path"]) / "data" / state["run_date"] / "summaries"
 	sum_dir.mkdir(parents=True, exist_ok=True)
 
+	# Compute forward factor premia once — same for all tickers since FF series is shared
+	forward_mu_factors = {}
+	if factors_available and ff_factors is not None:
+		try:
+			_, rf_10 = real_rf
+			factor_annual_means = np.array([
+				ff_factors["Mkt-RF"].mean() * 252,
+				ff_factors["SMB"].mean()    * 252,
+				ff_factors["HML"].mean()    * 252,
+				ff_factors["RMW"].mean()    * 252,
+				ff_factors["CMA"].mean()    * 252,
+				ff_factors["MOM"].mean()    * 252,
+			])
+			with open(sum_dir / "market_premia.txt", "w", encoding="utf-8") as premia_file:
+				forward_mu_factors = get_forward_mu_factors(factor_annual_means, rf_10, cape, premia_file)
+			logger.debug(f"Forward premia: ERP={forward_mu_factors.get('mkt', 0):.2%}  SMB={forward_mu_factors.get('smb', 0):.2%}  HML={forward_mu_factors.get('hml', 0):.2%}")
+		except Exception as e:
+			errors.append(f"Forward factor premia failed: {e}")
+			logger.warning(f"Forward factor premia computation failed: {e}")
+
 	for ticker in tickers:
 		fm = None
 		g = None
@@ -1124,7 +1346,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			if factors_available:
 				try:
 					ret = compute_returns(raw_prices, ticker, run_date, start_date, ff_factors, file=quant_file)
-					fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["RMA"], ret["CMA"], ret["MOM"], ret["rf_ann"], cape, real_rf, file=quant_file)
+					fm = run_factor_models(ret["excess_ret"], ret["MKT"], ret["SMB"], ret["HML"], ret["RMW"], ret["CMA"], ret["MOM"], ret["rf_ann"], forward_mu_factors, real_rf, file=quant_file)
 					factor_results[ticker] = {
 						k: v for k, v in fm.items()
 						if k not in ("residuals", "Y_hat")
@@ -1206,15 +1428,16 @@ def agent2_quant(state: PipelineState) -> dict:
 	logger.info(f"[Agent 2] Complete. New Errors: {len(errors) - existing_errors}")
 
 	return {
-		"factor_results":   factor_results,
-		"garch_results":    garch_results,
-		"mu_sigma":         mu_sigma,
-		"valuation":        valuation,
-		"financial_health": financial_health,
-		"earnings_data":    earnings_data,
-		"earnings_dates":   earnings_dates,
-		"quant_commentary": quant_commentary,
-		"covariance_matrix":cov_matrix,
-		"cape":             cape,
-		"errors":           errors,
+		"factor_results":      factor_results,
+		"garch_results":       garch_results,
+		"mu_sigma":            mu_sigma,
+		"valuation":           valuation,
+		"financial_health":    financial_health,
+		"earnings_data":       earnings_data,
+		"earnings_dates":      earnings_dates,
+		"quant_commentary":    quant_commentary,
+		"covariance_matrix":   cov_matrix,
+		"cape":                cape,
+		"forward_mu_factors":  forward_mu_factors,
+		"errors":              errors,
 	}

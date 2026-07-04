@@ -265,9 +265,11 @@ def _section_cover(pdf: PortfolioReport, state: dict):
     cape = state.get("cape", 25.0)
     fg   = state.get("fear_greed") or {}
     aaii = state.get("aaii_sentiment") or {}
+    fmp  = state.get("forward_mu_factors") or {}
 
     macro_items = [
         ("Shiller CAPE",          f"{cape:.1f}",                              cape > 30),
+        ("Market ERP (blended)",  f"{fmp['mkt']:.2%}" if fmp.get("mkt") is not None else "N/A", False),
         ("Fear & Greed Index",    f"{fg.get('score', 'N/A'):.2f} — {fg.get('rating', 'N/A')}", False),
         ("AAII Bullish",          aaii.get("bullish", "N/A"),                 False),
         ("AAII Bearish",          aaii.get("bearish", "N/A"),                 False),
@@ -567,6 +569,9 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			("Beta MKT",         fr.get("b_MKT"),        "{:.3f}"),
 			("Beta SMB",         fr.get("b_SMB"),        "{:.3f}"),
 			("Beta HML",         fr.get("b_HML"),        "{:.3f}"),
+			("Beta RMW",         fr.get("b_RMW"),        "{:.3f}"),
+			("Beta CMA",         fr.get("b_CMA"),        "{:.3f}"),
+			("Beta MOM",         fr.get("b_MOM"),        "{:.3f}"),
 			("Mu (annual)",      ms.get("mu_annual"),    "{:.2%}"),
 		]
 
@@ -699,6 +704,7 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 			("Target Price",				val.get("target_price", 0),   		"{:.2f}"),
 			("Earnings Growth",				val.get("earnings_growth", 0),		"{:.2%}"),
 			("Revenue Growth",				val.get("revenue_growth", 0),   	"{:.2%}"),
+			("Earnings Yield",				val.get("earnings_yield"),			"{:.2%}"),
 		]
 
 		for label, val_e, fmt in valuation_items:
