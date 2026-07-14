@@ -829,6 +829,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 logger.info(f"  Globe and Mail: {len(gm_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: Globe and Mail returned no results")
+                logger.warning(f"{ticker}: Globe and Mail returned no results")
             time.sleep(GENERAL_DELAY)
 
         elif is_etf:
@@ -849,6 +850,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 logger.info(f"  etf.com: {len(etf_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: etf.com returned no results")
+                logger.warning(f"{ticker}: etf.com returned no results")
             time.sleep(GENERAL_DELAY)
 
         else:
@@ -868,6 +870,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 logger.info(f"  Finviz: {len(finviz_results)} relevant articles")
             else:
                 errors.append(f"{ticker}: Finviz returned no results")
+                logger.warning(f"{ticker}: Finviz returned no results")
             time.sleep(FINVIZ_DELAY)
 
             sa_results = scrape_seeking_alpha(base_ticker)
@@ -882,6 +885,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
                 logger.info(f"  Seeking Alpha: {len(sa_results)} headlines")
             else:
                 errors.append(f"{ticker}: Seeking Alpha returned no results")
+                logger.warning(f"{ticker}: Seeking Alpha returned no results")
             time.sleep(SEEKALPHA_DELAY)
 
         # ── Yahoo Finance — all tickers; ticker already has .TO for TSX ──
@@ -900,6 +904,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
             logger.info(f"  Yahoo Finance ({ticker}): {len(yf_results)} relevant articles")
         else:
             errors.append(f"{ticker}: Yahoo Finance returned no results")
+            logger.warning(f"{ticker}: Yahoo Finance returned no results")
 
         # break # For testing
 
@@ -913,6 +918,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
         logger.info(f"  AAII: bullish={aaii.get('bullish')} bearish={aaii.get('bearish')}")
     else:
         errors.append(f"AAII fetch failed: {aaii.get('error')}")
+        logger.error(f"AAII fetch failed: {aaii.get('error')}")
 
     fg = fetch_fear_greed()
     write_raw(raw_dir, "MARKET", "fear_greed", json.dumps(fg, indent=2))
@@ -920,6 +926,7 @@ def agent1_sentiment(state: PipelineState) -> dict:
         logger.info(f"  Fear & Greed: {fg.get('score')} ({fg.get('rating')})")
     else:
         errors.append(f"Fear & Greed fetch failed: {fg.get('error')}")
+        logger.error(f"Fear & Greed fetch failed: {fg.get('error')}")
 
     # ── Podcast transcripts ───────────────────────────────────────────────────
     if podcast_sources:

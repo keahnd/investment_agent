@@ -103,7 +103,7 @@ def compute_composite_score(
     pe_pctile    = valuation_result.get("pe_vs_history_pctile")
     peg          = valuation_result.get("peg")
     consec_beats = earnings_data.get("consecutive_beats") or 0
-    gross_margin = financial_data.get("gross_margin") or 0
+    gross_margin = financial_data.get("gross_margin_current") or 0
 
     quality_score = 0
     if gross_margin > 0.50:   quality_score += 1
@@ -394,13 +394,14 @@ def value_rebalancing(
 		})
 
 	header = f"  {'Ticker':<8} {'Score':>7}  {'Action':<6}  {'Signal':<12}  {'PE%':>5}  {'View%':>6}  {'Margin':>7}  {'Beats':>5}"
-	logger.debug(f"[Value Rebalancing] Composite scores:\n{header}")
+	logger.debug(f"[Value Rebalancing] Composite scores:")
+	logger.debug(f"{header}")
 	for ta in ticker_analyses:
 		v    = ta["valuation_result"]
 		fh_  = ta["quality_metrics"]
 		bl_  = ta["bl_view"]
 		pe_pct   = v.get("pe_vs_history_pctile")
-		margin   = fh_.get("gross_margin")
+		margin   = fh_.get("gross_margin_current")
 		beats_ed = (earnings_data.get(ta["ticker"]) or {}).get("consecutive_beats")
 		row = (
 			f"  {ta['ticker']:<8} {ta['composite_score']:>+7.3f}  {ta['action']:<6}  "
@@ -416,8 +417,8 @@ def value_rebalancing(
 		ticker_analyses = ticker_analyses,
 		current_weights = current_weights,
 		max_position    = 0.25,
-		min_position    = 0.02,
-		max_adjust      = 0.05,
+		min_position    = 0.00,
+		max_adjust      = 0.08,
 	)
 
 	wt_header = f"  {'Ticker':<8} {'Old%':>6}  {'New%':>6}  {'Delta':>7}"
@@ -520,8 +521,9 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         results["max_sharpe"] = dict(ef.clean_weights())
     except Exception as e:
         errors.append(f"Max Sharpe failed: {e}")
+        logger.error(f"Max Sharpe optimisation failed: {e}")
         results["max_sharpe"] = None
-        
+
     # ── Minimum Variance ─────────────────────────────────────────
     try:
         ef = EfficientFrontier(mu_series, cov_df, weight_bounds=bounds)
@@ -530,8 +532,9 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         results["min_variance"] = dict(ef.clean_weights())
     except Exception as e:
         errors.append(f"Min Variance failed: {e}")
+        logger.error(f"Min Variance optimisation failed: {e}")
         results["min_variance"] = None
-        
+
     # ── Risk Parity ───────────────────────────────────────────────
     try:
         hrp = HRPOpt(returns=None, cov_matrix=cov_df)
@@ -539,8 +542,9 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         results["risk_parity"] = dict(hrp.clean_weights())
     except Exception as e:
         errors.append(f"Risk Parity failed: {e}")
+        logger.error(f"Risk Parity optimisation failed: {e}")
         results["risk_parity"] = None
-        
+
     # ── Target Return ─────────────────────────────────────────────
     try:
         target = 0.08 # Default target return
@@ -550,8 +554,9 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         results["target_return"] = dict(ef.clean_weights())
     except Exception as e:
         errors.append(f"Target Return failed: {e}")
+        logger.error(f"Target Return optimisation failed: {e}")
         results["target_return"] = None
-        
+
     # ── Robust Mean-Variance ──────────────────────────────────────
     try:
         rmv_weights, rmv_error = run_robust_mean_variance(
@@ -562,8 +567,9 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         results["robust_mv"] = rmv_weights
     except Exception as e:
         errors.append(f"Robust MV failed: {e}")
+        logger.error(f"Robust MV optimisation failed: {e}")
         results["robust_mv"] = None
-        
+
     # ── Value Based Investing ───────────────────────────────────────
     try:
         results["value_invest"] = value_rebalancing(
@@ -576,6 +582,7 @@ def run_optimisation(posterior_mu, posterior_cov, tickers, valuation, constraint
         )
     except Exception as e:
         errors.append(f"Value Investing failed: {e}")
+        logger.error(f"Value Investing rebalancing failed: {e}")
         results["value_invest"] = None
 
     return results, errors

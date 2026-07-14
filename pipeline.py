@@ -170,6 +170,7 @@ def run_user(user_path: Path) -> None:
 			"earnings_dates":    	None,
 			"covariance_matrix":	None,
 			"cape":					None,
+			"forward_mu_factors":	None,
 			"quant_commentary":  	None,
 			"bl_views":             None,
 			"posterior_mu":			None,
@@ -179,7 +180,7 @@ def run_user(user_path: Path) -> None:
 			"mc_current":           None,
 			"mc_port_current":		None,
 			"mc_rebalanced":        None,
-			"sim_commentary":       None,
+
 			"errors":               [],
 			"report_path":          None,
 			"email_sent":           None,

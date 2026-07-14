@@ -523,7 +523,7 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		for row in (state.get("recommendation_table") or [])
 	}
 
-	for ticker in tickers:
+	for i, ticker in enumerate(tickers):
 		fr  = (state.get("factor_results")   or {}).get(ticker, {})
 		gr  = (state.get("garch_results")    or {}).get(ticker, {})
 		ms  = (state.get("mu_sigma")         or {}).get(ticker, {})
@@ -534,11 +534,10 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		posterior_mu = (state.get("posterior_mu") or {}).get(ticker, {})
 		mu_sigma     = (state.get("mu_sigma") or {}).get(ticker, {})
 
-		# Check page space — add new page if less than 70mm remaining
-		if pdf.get_y() > PAGE_H - 90:
+		# Every ticker starts on a fresh page
+		if i > 0:
 			pdf.add_page()
 			pdf.set_bg()
-			pdf.page_header_bar("6. Model Outputs Per Asset (continued)")
 
 		consensus = rec_lookup.get(ticker, "HOLD")
 		consensus_color = C_GREEN if consensus == "BUY" else C_RED if consensus == "SELL" else C_GREY
@@ -546,10 +545,22 @@ def _section_model_outputs(pdf: PortfolioReport, state: dict, charts_dir):
 		pdf.ln(2)
 		header_text = _safe(f"{ticker} — {val.get('sector', '')} | {val.get('industry', '')}")
 		pdf.set_text_color(*C_ORANGE)
-		pdf.cell(pdf.get_string_width(header_text) + 4, 8, header_text, ln=False)
+		pdf.cell(CONTENT_W - 24, 8, header_text, ln=False)
 		pdf.set_text_color(*consensus_color)
-		pdf.cell(20, 8, _safe(f"[{consensus}]"), ln=True)
+		pdf.cell(24, 8, _safe(f"[{consensus}]"), ln=True, align="R")
 		pdf.set_text_color(*C_WHITE)
+
+		# Sentiment summary — full width, above the two-column layout
+		summary_text = (state.get("summaries") or {}).get(ticker)
+		if summary_text:
+			pdf.ln(2)
+			pdf.set_font("Helvetica", "B", FS_SMALL)
+			pdf.set_text_color(*C_CYAN)
+			pdf.cell(0, 5, "Recent News & Sentiment", ln=True)
+			pdf.set_font("Helvetica", "", FS_SMALL)
+			pdf.set_text_color(*C_WHITE)
+			pdf.multi_cell(0, 5, _safe(str(summary_text)))
+			pdf.ln(3)
 
 		# Two-column layout using fixed positions
 		left_x  = MARGIN
@@ -864,19 +875,22 @@ def _section_simulation_charts(pdf: PortfolioReport, state: dict, charts_dir: di
         pdf.image(curr_chart, x=MARGIN, w=CONTENT_W)
         pdf.ln(4)
 
-    # ── Per-strategy charts ───────────────────────────────────────
+    # ── Per-strategy charts — two per page ───────────────────────
     strategies = list(mc_strat.keys())
-    for i, strategy in enumerate(strategies):
+    valid_chart_count = 0
+    for strategy in strategies:
         chart_key = f"mc_portfolio_{strategy}"
         chart     = charts_dir / f"{chart_key}.png" if charts_dir else None
         if not chart or not chart.exists():
             continue
-        pdf.add_page()
-        pdf.set_bg()
-        pdf.page_header_bar("4. Monte Carlo Simulation")
+        if valid_chart_count % 2 == 0:
+            pdf.add_page()
+            pdf.set_bg()
+            pdf.page_header_bar("4. Monte Carlo Simulation")
         pdf.h2(f"{strategy.replace('_', ' ').title()} Portfolio — 1-Year Simulation")
         pdf.image(chart, x=MARGIN, w=CONTENT_W)
-        pdf.ln(4)        
+        pdf.ln(4)
+        valid_chart_count += 1
 
 
 def _section_recommendation_table(pdf: PortfolioReport, state: dict):

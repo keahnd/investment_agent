@@ -211,114 +211,13 @@ def port_monte_carlo(mu: np.ndarray, covar_ann: np.ndarray, init_port_value: flo
 def _fmt(val: float | None, spec: str) -> str:
     return format(val, spec) if val is not None else "N/A"
 
-# LLM SIM SUMMARY
-SIMULATOR_PROMPT = """You are a quantitative analyst reviewing simulation outputs for a portfolio.
-
-For each monte carlo simulation, done per ticker, the current portfolio and the rebalanced portfolios
-
-Address these specific items:
-- Tail risk in dollar terms.
-- Which individual tickers drive the most risk and the most returns.
-- The probability of gains from prob_up
-- Fallback acknowledgement, if any tickers have fallback_present as true then the simulation was run on default assumptions
-and should be treated as such. Dont't mention fallback unless its present.
-
-Data:
-{data}
-
-For each ticker and portfolio write 2-3 sentences maximum summarising the simulation results.
-Compare the upside and expected returns to the downside risk.
-Compare the different portfolios to each other in terms of expected returns, probability of
-gains and downside risk measures."""
 
 
-def generate_sim_commentary(
-        tickers: list[str],
-        strategies: list[str],
-        mc_tickers: dict,
-        mc_curr_port: dict,
-        mc_rebal_port: dict,
-        fallback_present: dict,
-        file = None
-    ) -> str:
-    """
-    Calls the LLM to interpret simulation outputs per ticker/portfolio.
-
-    Builds a structured simulation summary for each ticker and portfolio
-
-    Args:
-        tickers: List of ticker symbols to include in the commentary.
-        mc_tickers: Dict of per-ticker sim results
-        mc_curr_port: Dict of current protfolio sim results
-        mc_rebal_port: Dict of rebalanced portfolio sim results
-        fallback_present: Dict of whether ticker has real data or assumed data
-
-    Returns:
-        Plain prose commentary, one paragraph per ticker labelled with the
-        ticker symbol. Returns a fallback string if the LLM call fails.
-    """
-    # Build a structured summary of all metrics per ticker
-    data_lines = []
-    for ticker in tickers:        
-        fr  = mc_tickers.get(ticker, {})
-
-        pct = fr.get('pct', [None]*7)
-        data_lines.append(f"""{ticker}:
-        E[S_T]={_fmt(fr.get('E_ST'), '.2f')}, median={_fmt(pct[3], '.2f')}, \
-        S_current={_fmt(fr.get('S_current'), '.2f')}
-        Prob(up)={_fmt(fr.get('prob_up'), '.2%')}
-        VaR_95={_fmt(fr.get('VaR_95'), '.2f')}, CVaR_95={_fmt(fr.get('CVaR_95'), '.2f')}
-        Percentiles: 1%={_fmt(pct[0], '.2f')}, 5%={_fmt(pct[1], '.2f')}, \
-            25%={_fmt(pct[2], '.2f')}, 75%={_fmt(pct[4], '.2f')}, \
-            95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')},
-        Fallback: {fallback_present.get(ticker, True)}
-        """)
-    
-    fr = mc_curr_port
-    pct = fr.get('pct', [None]*7)
-    data_lines.append(f"""Current Portfolio:
-        E[S_T]={_fmt(fr.get('E_ST'), '.2f')}, median={_fmt(pct[3], '.2f')}, \
-            S_current={_fmt(fr.get('S_current'), '.2f')}
-        Prob(up)={_fmt(fr.get('prob_up'), '.2%')}
-        VaR_95={_fmt(fr.get('VaR_95'), '.2f')}, CVaR_95={_fmt(fr.get('CVaR_95'), '.2f')}
-        Percentiles: 1%={_fmt(pct[0], '.2f')}, 5%={_fmt(pct[1], '.2f')}, \
-            25%={_fmt(pct[2], '.2f')}, 75%={_fmt(pct[4], '.2f')}, \
-            95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')}
-        """)
-    
-    for strat in strategies:
-        if strat not in mc_rebal_port:
-            continue
-        fr = mc_rebal_port[strat]
-        pct = fr.get('pct', [None]*7)
-        data_lines.append(f"""{strat}:
-        E[S_T]={_fmt(fr.get('E_ST'), '.2f')}, median={_fmt(pct[3], '.2f')}, \
-            S_current={_fmt(fr.get('S_current'), '.2f')}
-        Prob(up)={_fmt(fr.get('prob_up'), '.2%')}
-        VaR_95={_fmt(fr.get('VaR_95'), '.2f')}, CVaR_95={_fmt(fr.get('CVaR_95'), '.2f')}
-        Percentiles: 1%={_fmt(pct[0], '.2f')}, 5%={_fmt(pct[1], '.2f')}, \
-            25%={_fmt(pct[2], '.2f')}, 75%={_fmt(pct[4], '.2f')}, \
-            95%={_fmt(pct[5], '.2f')}, 99%={_fmt(pct[6], '.2f')}
-        """)
-
-    prompt = SIMULATOR_PROMPT.format(data = "\n".join(data_lines))
-
-    try:
-        llm      = get_llm()
-        response = llm.invoke(prompt)
-        print(f"\n LLM Commentary:{response.content.strip()}", file=file)
-        return response.content.strip()
-    except Exception as e:
-        logger.warning(f"LLM sim commentary failed: {e}")
-        return "Simulation commentary unavailable this run."
-    
-    
 def build_advisory_prompt(
         tickers: list,
         recommendation_table: list,
         bl_views: dict,
         quant_commentary: str,
-        risk_commentary: str,
         mc_portfolio_current: dict,
         mc_portfolio_recommended: dict,
         aaii_sentiment: dict,
@@ -417,9 +316,6 @@ STRATEGY WEIGHT COMPARISON:
 SIMULATION RESULTS:
 {chr(10).join(sim_lines)}
 
-RISK COMMENTARY:
-{risk_commentary}
-
 QUANTITATIVE MODEL COMMENTARY:
 {quant_commentary}
 
@@ -468,7 +364,6 @@ def generate_advisory_commentary(
         recommendation_table: list,
         bl_views: dict,
         quant_commentary: str,
-        risk_commentary: str,
         mc_portfolio_current: dict,
         mc_portfolio_recommended: dict,
         aaii_sentiment: dict,
@@ -486,7 +381,6 @@ def generate_advisory_commentary(
         recommendation_table     = recommendation_table,
         bl_views                 = bl_views,
         quant_commentary         = quant_commentary,
-        risk_commentary          = risk_commentary,
         mc_portfolio_current     = mc_portfolio_current,
         mc_portfolio_recommended = mc_portfolio_recommended,
         aaii_sentiment           = aaii_sentiment,
@@ -534,7 +428,7 @@ def agent4_simulator(state: PipelineState) -> dict:
     strategies = list(state["recommended_weights"].keys())
     port_info = state["mu_sigma"]
     mu_vec = get_mu_for_tickers(tickers, state)
-    fallback_present = {t: port_info[t]["is_fallback"] for t in tickers}
+
 
     sum_dir = Path(state["user_path"]) / "data" / state["run_date"] / "summaries"
 
@@ -575,21 +469,13 @@ def agent4_simulator(state: PipelineState) -> dict:
             mc_port_rebalanced[strategy] = port_monte_carlo(mu_vec, Sigma, total_value, weights, file=f)
     
     
-    try:
-        with open(port_sum_dir / "llm_commentary.txt", "w", encoding="utf-8") as f:
-            sim_commentary = generate_sim_commentary(tickers, strategies, mc_current, mc_port_current, mc_port_rebalanced, fallback_present, file=f)
-    except Exception as e:
-            errors.append(f"Sim Commentary Failed: {e}")
-            sim_commentary = None
-            
     logger.info(f"[Agent 4] Complete. New Errors: {len(errors) - existing_errors}")
-    
+
     advisory_commentary = generate_advisory_commentary(
         tickers                  = state["tickers"],
         recommendation_table     = state["recommendation_table"],
         bl_views                 = state["bl_views"],
         quant_commentary         = state["quant_commentary"],
-        risk_commentary          = sim_commentary,
         mc_portfolio_current     = mc_port_current,
         mc_portfolio_recommended = mc_port_rebalanced,
         aaii_sentiment           = state["aaii_sentiment"] or {},
@@ -599,10 +485,9 @@ def agent4_simulator(state: PipelineState) -> dict:
     )
 
     return {
-        "mc_current":     mc_current,
-        "mc_port_current": mc_port_current,
+        "mc_current":          mc_current,
+        "mc_port_current":     mc_port_current,
         "mc_port_rebalanced":  mc_port_rebalanced,
-        "sim_commentary": sim_commentary,
-        "advisory_commentary" : advisory_commentary,
-        "errors": errors,
+        "advisory_commentary": advisory_commentary,
+        "errors":              errors,
     }

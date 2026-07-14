@@ -380,16 +380,29 @@ def current_factor_spread():
 			tickers[ticker] = {}
 
 	# ── SMB spread: IWM/SPY trailing P/E ─────────────────────────────────────
-	try:
-		iwm_implied     = (1 / tickers["IWM"]["forwardPE"]) + tickers["IWM"]["earningsGrowth"]
-		spy_implied     = (1 / tickers["SPY"]["forwardPE"]) + tickers["SPY"]["earningsGrowth"]
-		lambda_smb_implied = iwm_implied - spy_implied
-	except Exception as e:
-		logger.warning(f"SMB implied return calculation failed ({e}) — will return None")
-		lambda_smb_implied = None
+	# Commented out: forwardPE and earningsGrowth are not reliably available for ETFs via yfinance
+	# try:
+	# 	iwm_fpe = tickers["IWM"].get("forwardPE")
+	# 	iwm_eg  = tickers["IWM"].get("earningsGrowth")
+	# 	spy_fpe = tickers["SPY"].get("forwardPE")
+	# 	spy_eg  = tickers["SPY"].get("earningsGrowth")
+	# 	if not all([iwm_fpe, spy_fpe, iwm_eg is not None, spy_eg is not None]):
+	# 		raise ValueError(f"Missing forwardPE or earningsGrowth for IWM/SPY (IWM_PE={iwm_fpe}, SPY_PE={spy_fpe})")
+	# 	iwm_implied     = (1 / iwm_fpe) + iwm_eg
+	# 	spy_implied     = (1 / spy_fpe) + spy_eg
+	# 	lambda_smb_implied = iwm_implied - spy_implied
+	# except Exception as e:
+	# 	logger.warning(f"SMB implied return calculation failed ({e}) — will return None")
+	# 	lambda_smb_implied = None
 
 	iwm_pe = tickers["IWM"].get("trailingPE")
 	spy_pe = tickers["SPY"].get("trailingPE")
+
+	if iwm_pe and spy_pe and iwm_pe > 0 and spy_pe > 0:
+		lambda_smb_implied = (1 / iwm_pe) - (1 / spy_pe)
+	else:
+		logger.warning("SMB implied: trailingPE unavailable for IWM/SPY — will return None")
+		lambda_smb_implied = None
 
 	smb_spread_adjustment = None
 	smb_spread_historic   = 0.85   # small caps historically trade at ~15% P/E discount
@@ -402,18 +415,33 @@ def current_factor_spread():
 		logger.warning("SMB spread: P/E data unavailable, using long-run anchor only")
 
 	# ── HML spread: IVE/IVW price-to-book ────────────────────────────────────
-	try:
-		ive_implied     = (1 / tickers["IVE"]["forwardPE"]) + tickers["IVE"]["earningsGrowth"]
-		ivw_implied     = (1 / tickers["IVW"]["forwardPE"]) + tickers["IVW"]["earningsGrowth"]
-		lambda_hml_implied = ive_implied - ivw_implied
-	except Exception as e:
-		logger.warning(f"HML implied return calculation failed ({e}) — will return None")
-		lambda_hml_implied = None
+	# Commented out: forwardPE and earningsGrowth are not reliably available for ETFs via yfinance
+	# try:
+	# 	ive_fpe = tickers["IVE"].get("forwardPE")
+	# 	ive_eg  = tickers["IVE"].get("earningsGrowth")
+	# 	ivw_fpe = tickers["IVW"].get("forwardPE")
+	# 	ivw_eg  = tickers["IVW"].get("earningsGrowth")
+	# 	if not all([ive_fpe, ivw_fpe, ive_eg is not None, ivw_eg is not None]):
+	# 		raise ValueError(f"Missing forwardPE or earningsGrowth for IVE/IVW (IVE_PE={ive_fpe}, IVW_PE={ivw_fpe})")
+	# 	ive_implied     = (1 / ive_fpe) + ive_eg
+	# 	ivw_implied     = (1 / ivw_fpe) + ivw_eg
+	# 	lambda_hml_implied = ive_implied - ivw_implied
+	# except Exception as e:
+	# 	logger.warning(f"HML implied return calculation failed ({e}) — will return None")
+	# 	lambda_hml_implied = None
 
 	# P/B is the right metric here — HML is constructed from book-to-market
 	# ratios, so P/B directly measures what the factor is tracking
+	ive_pe = tickers["IVE"].get("trailingPE")
+	ivw_pe = tickers["IVW"].get("trailingPE")
 	ive_pb = tickers["IVE"].get("priceToBook")
 	ivw_pb = tickers["IVW"].get("priceToBook")
+
+	if ive_pe and ivw_pe and ive_pe > 0 and ivw_pe > 0:
+		lambda_hml_implied = (1 / ive_pe) - (1 / ivw_pe)
+	else:
+		logger.warning("HML implied: trailingPE unavailable for IVE/IVW — will return None")
+		lambda_hml_implied = None
 
 	hml_spread_adjustment = None
 	hml_spread_historic   = 3.80   # growth historically trades at ~3.8x value P/B
@@ -456,19 +484,34 @@ def fetch_damodaran_erp() -> float | None:
 			io.BytesIO(response.content),
 			sheet_name="Historical ERP"
 		)
-		
-		# The ERP column is called "Implied Premium (FCFE)"
-		# Drop rows where the date or ERP is missing
-		xl = xl.dropna(subset=["Month", "Implied Premium (FCFE)"])
-		
+
+		logger.debug(f"Damodaran sheet columns: {xl.columns.tolist()}")
+
+		# Column names may change — find them by partial match in priority order
+		date_col = next((c for c in xl.columns if "month" in str(c).lower()), None)
+		erp_col  = (
+			next((c for c in xl.columns if "fcfe"  in str(c).lower()), None)       # old format
+			or next((c for c in xl.columns if "t12m)" in str(c).lower()
+			         and str(c).upper().startswith("ERP")), None)                   # new: ERP (T12m)
+			or next((c for c in xl.columns if str(c).upper().startswith("ERP")), None)  # any ERP column
+		)
+
+		if date_col is None or erp_col is None:
+			logger.error(f"Damodaran: expected columns not found. Available: {xl.columns.tolist()}")
+			return None
+
+		logger.debug(f"Damodaran: using date_col='{date_col}', erp_col='{erp_col}'")
+
+		xl = xl.dropna(subset=[date_col, erp_col])
+
 		# Most recent row is the latest monthly estimate
-		latest_erp = float(xl["Implied Premium (FCFE)"].iloc[-1])
-		logger.debug(f"Got Damodaran ERP from Month of: {xl['Month'].iloc[-1]}")
+		latest_erp = float(xl[erp_col].iloc[-1])
+		logger.debug(f"Got Damodaran ERP as {latest_erp} from Month of: {xl[date_col].iloc[-1]}")
 		
 		return latest_erp
 	
 	except Exception as e:
-		logger.error("Failed to get Damodaran ERP")
+		logger.error(f"Failed to get Damodaran ERP: {e}")
 		return None  # caller handles fallback
 
 
@@ -654,9 +697,9 @@ def run_factor_models(
 		+ b_MKT * forward_mu_factors["mkt"]
 		+ b_SMB * forward_mu_factors["smb"]
 		+ b_HML * forward_mu_factors["hml"]
-		+ b_RMW * forward_mu_factors["rmw"],
-		+ b_CMA * forward_mu_factors["cma"],
-		+ b_MOM * forward_mu_factors["mom"],
+		+ b_RMW * forward_mu_factors["rmw"]
+		+ b_CMA * forward_mu_factors["cma"]
+		+ b_MOM * forward_mu_factors["mom"]
 	)
 	print(f"  Estimated annualised mu      : {mu_annual:.2%}", file=file)
 
@@ -793,7 +836,11 @@ def fetch_valuation_metrics(ticker: str, force_refresh: bool = False) -> dict:
 				),
 				'earnings_growth': info.get('earningsGrowth'),
 				'revenue_growth': info.get('revenueGrowth'),
-				'earnings_yield': (1 / info.get('forwardPE')) + info.get('earningsGrowth'),
+				'earnings_yield': (
+					(1 / info['forwardPE']) + info['earningsGrowth']
+					if info.get('forwardPE') and info.get('earningsGrowth') is not None
+					else None
+				),
 				'200MA': info.get('twoHundredDayAverage'),
 				'50MA': info.get('fiftyDayAverage'),
 				'sector': info.get('sector'),
@@ -1330,11 +1377,11 @@ def agent2_quant(state: PipelineState) -> dict:
 				ff_factors["MOM"].mean()    * 252,
 			])
 			with open(sum_dir / "market_premia.txt", "w", encoding="utf-8") as premia_file:
-				forward_mu_factors = get_forward_mu_factors(factor_annual_means, rf_10, cape, premia_file)
+				forward_mu_factors = get_forward_mu_factors(factor_annual_means, cape, rf_10, premia_file)
 			logger.debug(f"Forward premia: ERP={forward_mu_factors.get('mkt', 0):.2%}  SMB={forward_mu_factors.get('smb', 0):.2%}  HML={forward_mu_factors.get('hml', 0):.2%}")
 		except Exception as e:
 			errors.append(f"Forward factor premia failed: {e}")
-			logger.warning(f"Forward factor premia computation failed: {e}")
+			logger.error(f"Forward factor premia computation failed: {e}")
 
 	for ticker in tickers:
 		fm = None
@@ -1353,6 +1400,7 @@ def agent2_quant(state: PipelineState) -> dict:
 					}
 				except Exception as e:
 					errors.append(f"{ticker}: Failed to run factor analysis: {e}")
+					logger.error(f"{ticker}: Failed to run factor analysis: {e}")
 					factor_results[ticker] = {}
 
 				if fm is not None:
@@ -1364,6 +1412,7 @@ def agent2_quant(state: PipelineState) -> dict:
 						}
 					except Exception as e:
 						errors.append(f"{ticker}: Failed to run garch analysis: {e}")
+						logger.error(f"{ticker}: Failed to run garch analysis: {e}")
 						garch_results[ticker] = {}
 			
 		last_price = float(raw_prices[ticker].dropna().iloc[-1]) if (ticker in raw_prices.columns and raw_prices[ticker].notna().any()) else None
@@ -1376,6 +1425,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			}
 		else:
 			errors.append(f"{ticker}: Failed to get mu and sigma")
+			logger.error(f"{ticker}: Failed to get mu and sigma — using fallback mu=7%, sigma=20%")
 			mu_sigma[ticker] = {
 				"mu_annual":    0.07,
 				"sigma_annual": 0.20,
@@ -1387,6 +1437,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			financial_health[ticker] = fetch_financial_health(ticker)
 		except Exception as e:
 			errors.append(f"{ticker}: Financial health fetch failed: {e}")
+			logger.error(f"{ticker}: Financial health fetch failed: {e}")
 			financial_health[ticker] = {}
 			
 		try:
@@ -1395,6 +1446,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			valuation[ticker] = {**valuation_metrics, **val_signal}
 		except Exception as e:
 			errors.append(f"{ticker}: Valuation fetch failed: {e}")
+			logger.error(f"{ticker}: Valuation fetch failed: {e}")
 			valuation[ticker] = {}
 			
 		try:
@@ -1403,6 +1455,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			earnings_dates[ticker] = earnings.get("next_earnings_date")
 		except Exception as e:
 			errors.append(f"{ticker}: earnings data fetch failed: {e}")
+			logger.error(f"{ticker}: Earnings data fetch failed: {e}")
 			earnings_data[ticker]  = {}
 			earnings_dates[ticker] = None
 		
@@ -1423,6 +1476,7 @@ def agent2_quant(state: PipelineState) -> dict:
 			)
 	except Exception as e:
 			errors.append(f"Quant Commentary Failed: {e}")
+			logger.error(f"Quant commentary generation failed: {e}")
 			quant_commentary = None
 
 	logger.info(f"[Agent 2] Complete. New Errors: {len(errors) - existing_errors}")

@@ -60,7 +60,6 @@ test_state = {
     "mc_current":     None,
     "mc_port_current": None,
     "mc_port_rebalanced":  None,
-    "sim_commentary":      None,
 }
 
 result = agent4_simulator(test_state)
@@ -74,9 +73,6 @@ print(result["mc_port_current"])
 
 print("\n=== mc_port_rebalanced ===")
 print(result["mc_port_rebalanced"])
-
-print("\n=== sim_commentary ===")
-print(result["sim_commentary"])
 
 print("\n=== errors ===")
 for e in result["errors"]:

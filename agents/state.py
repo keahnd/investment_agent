@@ -37,8 +37,9 @@ class PipelineState(TypedDict):
     earnings_data:     Optional[dict]  # {ticker: {recent_quarters, avg_surprise, consecutive_beats}}
     earnings_dates:    Optional[dict]  # {ticker: next_earnings_date}
     covariance_matrix: Optional[dict]  # Covariance Matrix for the universe of stocks
-    cape:              Optional[float] # Current Shiller CAPE number
-    quant_commentary:  Optional[str]   # LLM anomaly flags and interpretation
+    cape:                Optional[float] # Current Shiller CAPE number
+    forward_mu_factors:  Optional[dict]  # {mkt, smb, hml, rmw, cma, mom} annualised forward premia
+    quant_commentary:    Optional[str]   # LLM anomaly flags and interpretation
 
     # ── Agent 3 outputs ──────────────────────────────────────────
     bl_views:              Optional[dict]  # {ticker: {view_return, confidence, reasoning}}
@@ -50,7 +51,6 @@ class PipelineState(TypedDict):
     mc_current:             Optional[dict]  # Monte Carlo stats per-ticker
     mc_port_current:        Optional[dict]  # Monte Carlo stats for current weights
     mc_port_rebalanced:     Optional[dict]  # Monte Carlo stats for suggested weights
-    sim_commentary:         Optional[str]
     advisory_commentary:    Optional[str]
 
     # ── Pipeline metadata ────────────────────────────────────────
