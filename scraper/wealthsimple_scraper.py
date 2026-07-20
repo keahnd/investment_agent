@@ -33,7 +33,7 @@ def get_holdings(page, user_path: Path):
 	save_path = user_path/"portfolio.csv"
 	page.goto("https://my.wealthsimple.com/app/holdings-dashboard")
 
-	page.wait_for_selector("#holdings-dashboard-container", timeout=15000)
+	page.wait_for_selector('[data-testid="holdings-dashboard-table"]', timeout=15000)
 	page.click('[data-testid="button-download-holdings"]')
 
 	checkbox = page.get_by_role("checkbox", name="TFSA")

@@ -28,6 +28,7 @@ with sync_playwright() as p:
     ws_login(page)
     get_holdings(page, Path("users/keahn_div"))
     
-    page.pause()
-    
+    # page.pause()
     browser.close()
+    
+	# page.wait_for_event("close", timeout=0)
