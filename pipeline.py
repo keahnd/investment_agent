@@ -76,11 +76,11 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 		for row in reader:
 			if not row.get("Symbol"):
 				continue
-			sym      = row["Symbol"].strip().upper()
-			exchange = row.get("Exchange", "").strip()
-			if exchange == "TSX":
+			sym           = row["Symbol"].strip().upper()
+			exchange      = row.get("Exchange", "").strip()
+			security_type = row.get("Security Type", "").strip().upper()
+			if exchange == "TSX" and not sym.endswith(".TO"):
 				sym += ".TO"
-			tickers.append(sym)
 			market_value = float(row["Market Value"])
 			currency = row.get("Market Value Currency", "CAD").strip().upper()
 			# Convert to CAD
@@ -94,7 +94,6 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 				market_price = market_price * usd_cad_rate
 
 
-			rows.append((sym, market_value))
 			total_value_cad += market_value
 
 			portfolio_rows.append({
@@ -106,6 +105,14 @@ def load_portfolio(user_path: Path, usd_cad_rate: float) -> list[str]:
 				"currency":      "CAD",
 				"market_price": market_price,
 			})
+
+			# Cash/currency rows aren't tradeable tickers — count their value
+			# toward the portfolio total but skip scraping/price-download.
+			if security_type == "CURRENCY":
+				continue
+
+			tickers.append(sym)
+			rows.append((sym, market_value))
 
 	for sym, market_value in rows:
 		weights[sym] = round(market_value / total_value_cad, 6)

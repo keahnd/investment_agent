@@ -336,7 +336,7 @@ def reconcile_virtual_portfolio(conn, today, file=None):
     last_rec, weights_by_strategy = _load_recommendations(conn, last_rec_date, file)
     
     portfolio_tickers = {r[0] for r in conn.execute(
-        "SELECT DISTINCT ticker FROM portfolios WHERE date = ?", (today,)
+        "SELECT DISTINCT ticker FROM portfolios WHERE date = ? AND asset_class != 'CURRENCY'", (today,)
     ).fetchall()}
     rec_tickers = {r[0] for r in conn.execute(
         "SELECT DISTINCT ticker FROM recommendations WHERE date = ?", (last_rec_date,)
